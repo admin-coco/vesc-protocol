@@ -281,11 +281,11 @@ async function main() {
   const serveMode  = process.argv.includes("--serve") || watchMode;
   const port       = parseInt(process.env.PORT || "3000", 10);
 
+  // Start HTTP server first so Railway health checks pass even before first fetch
+  if (serveMode) startServer(port);
+
   if (!CONFIG.FX_API_URL) throw new Error("FX_API_URL not set in environment");
   if (!CONFIG.FX_API_KEY) throw new Error("FX_API_KEY not set in environment");
-
-  // Start HTTP server before first rate fetch so Railway health checks pass
-  if (serveMode) startServer(port);
 
   log("INFO", "VESC Rate Oracle v2.0", {
     vault:     CONFIG.VAULT_ADDRESS,
