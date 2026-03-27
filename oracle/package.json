@@ -1,0 +1,12 @@
+{
+  "name": "vesc-oracle",
+  "version": "2.0.0",
+  "description": "VESC Protocol VES/USD Rate Oracle",
+  "main": "rate-updater.js",
+  "scripts": {
+    "start": "node rate-updater.js --watch"
+  },
+  "dependencies": {
+    "ethers": "^6.0.0"
+  }
+}
