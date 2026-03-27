@@ -1,0 +1,2 @@
+python-telegram-bot[job-queue]==21.6
+web3==6.20.3
