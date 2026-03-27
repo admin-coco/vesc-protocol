@@ -114,6 +114,7 @@ async function fetchFxRates() {
   const buy  = buyEntry.exchangeRateNumber;
 
   log("INFO", "VES/USD rates fetched from API", { sell, buy, updatedAt: sellEntry.updatedAt });
+  cachedRates = { sell, buy, fetchedAt: new Date().toISOString() };
   return { sell, buy };
 }
 
@@ -237,15 +238,54 @@ async function updateRates() {
   }
 }
 
+// ─── HTTP server ───────────────────────────────────────────────────────────
+// Exposes GET /rates and GET /health so Railway can health-check the service
+// and the Telegram bot (or deploy scripts) can query current rates.
+
+const http = require("http");
+
+let cachedRates = null; // { sell, buy, fetchedAt }
+
+function startServer(port) {
+  const server = http.createServer((req, res) => {
+    if (req.method !== "GET") {
+      res.writeHead(405).end();
+      return;
+    }
+    if (req.url === "/health") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "ok" }));
+      return;
+    }
+    if (req.url === "/rates") {
+      if (!cachedRates) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "rates not yet fetched" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(cachedRates));
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  server.listen(port, () => log("INFO", `HTTP server listening on port ${port}`));
+}
+
 // ─── Entry point ───────────────────────────────────────────────────────────
 
 const MAX_CONSECUTIVE_FAILURES = 3;
 
 async function main() {
-  const watchMode = process.argv.includes("--watch");
+  const watchMode  = process.argv.includes("--watch");
+  const serveMode  = process.argv.includes("--serve") || watchMode;
+  const port       = parseInt(process.env.PORT || "3000", 10);
 
   if (!CONFIG.FX_API_URL) throw new Error("FX_API_URL not set in environment");
   if (!CONFIG.FX_API_KEY) throw new Error("FX_API_KEY not set in environment");
+
+  // Start HTTP server before first rate fetch so Railway health checks pass
+  if (serveMode) startServer(port);
 
   log("INFO", "VESC Rate Oracle v2.0", {
     vault:     CONFIG.VAULT_ADDRESS,

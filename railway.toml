@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "node oracle/rate-updater.js --watch"
+healthcheckPath = "/health"
+restartPolicyType = "always"
+
+[nixpacks]
+pkgs = ["nodejs_20"]
