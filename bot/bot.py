@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 RPC_URL        = os.environ.get("RPC_URL", "https://mainnet.base.org")
-VAULT_ADDRESS  = "0xecfc3fef09089aaaec1aa8517c76335f3f4223c4"
+VAULT_ADDRESS  = "0x50f50cf026837ab49f337927d2b3269a7dedbc60"  # ERC1967Proxy
 
 VAULT_ABI = [
     {
@@ -275,6 +275,103 @@ async def _scheduled_post(ctx: ContextTypes.DEFAULT_TYPE):
         log.error("scheduled post error: %s", e)
 
 
+# ─── /pool ─────────────────────────────────────────────────────────────────
+
+def _pool_advice(buy: Decimal, sell: Decimal) -> str:
+    """
+    Generate CL pool setup guidance from current buy/sell rates.
+
+    VESC is priced in USDC. In a VESC/USDC pool the "price" is USDC per VESC,
+    i.e. the inverse of the VES/USD rate.
+
+    sell rate (612 VES/USD) → user gets 1/612 USDC per VESC when burning  → lower bound
+    buy  rate (704 VES/USD) → user gets 1/704 USDC per VESC when minting  → upper bound
+    mid  rate               → midpoint of the two, used as pool center
+    """
+    price_at_sell = Decimal(1) / sell   # USDC per VESC at sell rate (higher — more USDC back)
+    price_at_buy  = Decimal(1) / buy    # USDC per VESC at buy  rate (lower  — less USDC back)
+    mid_price     = (price_at_sell + price_at_buy) / 2
+    spread_pct    = float((price_at_sell - price_at_buy) / mid_price * 100)
+
+    # Add a 10% buffer outside the buy/sell band so the position isn't
+    # constantly at the edge during minor rate fluctuations.
+    buffer        = Decimal("0.10")
+    range_low     = price_at_buy  * (1 - buffer)
+    range_high    = price_at_sell * (1 + buffer)
+
+    # Fee tier: the buy/sell spread is ~13% here, so 1% fee is appropriate.
+    # If spread ever compresses below 2%, drop to 0.3%.
+    if spread_pct > 5:
+        fee_tier    = "1%"
+        fee_reason  = f"spread is {spread_pct:.1f}% — wide enough to absorb 1% fee"
+    elif spread_pct > 1:
+        fee_tier    = "0.3%"
+        fee_reason  = f"spread is {spread_pct:.1f}% — moderate, 0.3% is efficient"
+    else:
+        fee_tier    = "0.05%"
+        fee_reason  = f"spread is {spread_pct:.1f}% — tight, use lowest fee tier"
+
+    # Rebalance warning: if current mid is within 5% of either edge, flag it.
+    edge_warn = ""
+    low_gap  = float((mid_price - range_low)  / mid_price * 100)
+    high_gap = float((range_high - mid_price) / mid_price * 100)
+    if low_gap < 5:
+        edge_warn = "\n\n⚠️ *Rate is near the lower edge — consider rebalancing.*"
+    elif high_gap < 5:
+        edge_warn = "\n\n⚠️ *Rate is near the upper edge — consider rebalancing.*"
+
+    return (
+        f"🏊 *VESC/USDC Concentrated Liquidity Pool*\n\n"
+
+        f"*Current Rates*\n"
+        f"  Buy  (mint): `{buy:,.4f} VES/USD` → `{price_at_buy:.8f} USDC/VESC`\n"
+        f"  Sell (burn): `{sell:,.4f} VES/USD` → `{price_at_sell:.8f} USDC/VESC`\n"
+        f"  Mid:         `{mid_price:.8f} USDC/VESC`\n"
+        f"  Spread:      `{spread_pct:.2f}%`\n\n"
+
+        f"*Suggested Price Range* (±10% buffer outside spread)\n"
+        f"  Lower: `{range_low:.8f} USDC/VESC`\n"
+        f"  Upper: `{range_high:.8f} USDC/VESC`\n\n"
+
+        f"*Fee Tier*\n"
+        f"  Recommended: `{fee_tier}` — {fee_reason}\n\n"
+
+        f"*Setup on Aerodrome (Base)*\n"
+        f"  1. Go to aerodrome.finance → Liquidity → New Position\n"
+        f"  2. Select tokens: `VESC` + `USDC`\n"
+        f"  3. Choose pool type: *Concentrated (CL)*\n"
+        f"  4. Fee tier: `{fee_tier}`\n"
+        f"  5. Set min price: `{range_low:.8f}` USDC per VESC\n"
+        f"  6. Set max price: `{range_high:.8f}` USDC per VESC\n"
+        f"  7. Deposit amounts and confirm\n\n"
+
+        f"*Setup on Uniswap v3 (Base)*\n"
+        f"  1. Go to app.uniswap.org → Pool → New Position → Base network\n"
+        f"  2. Select tokens: `VESC` + `USDC`\n"
+        f"  3. Fee tier: `{fee_tier}`\n"
+        f"  4. Set min price: `{range_low:.8f}` USDC per VESC\n"
+        f"  5. Set max price: `{range_high:.8f}` USDC per VESC\n"
+        f"  6. Deposit and confirm\n\n"
+
+        f"*When to Rebalance*\n"
+        f"  • When the live rate moves outside your range\n"
+        f"  • Use `/alert {spread_pct/2:.1f}` to get notified when rate moves ±{spread_pct/2:.1f}%\n"
+        f"  • Run `/pool` again after each oracle update for fresh numbers"
+        f"{edge_warn}"
+    )
+
+
+async def cmd_pool(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        buy, sell = get_buy_sell_rates()
+    except Exception as e:
+        log.error("pool rpc error: %s", e)
+        await update.message.reply_text("❌ Could not fetch rates from vault.")
+        return
+
+    await update.message.reply_text(_pool_advice(buy, sell), parse_mode="Markdown")
+
+
 # ─── /stop ─────────────────────────────────────────────────────────────────
 
 async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -299,9 +396,10 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "👋 *VESC Price Bot*\n\n"
         "I track the live VES/USDC rate from the VESC Protocol vault on Base.\n\n"
         "Commands:\n"
-        "  /price — current rate\n"
+        "  /price — current buy & sell rates\n"
         "  /quote mint 100 — VESC you'd get for 100 USDC\n"
         "  /quote burn 500 — USDC you'd get for 500 VESC\n"
+        "  /pool — CL pool setup guide with suggested price range\n"
         "  /alert 2.5 — notify when rate moves ±2.5%\n"
         "  /schedule 60 — post rate every 60 min\n"
         "  /stop — cancel all alerts & schedules",
@@ -320,6 +418,7 @@ def main():
     app.add_handler(CommandHandler("quote", cmd_quote))
     app.add_handler(CommandHandler("alert", cmd_alert))
     app.add_handler(CommandHandler("schedule", cmd_schedule))
+    app.add_handler(CommandHandler("pool",  cmd_pool))
     app.add_handler(CommandHandler("stop",  cmd_stop))
 
     log.info("Bot starting...")
