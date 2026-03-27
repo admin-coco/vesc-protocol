@@ -59,22 +59,23 @@ vault = w3.eth.contract(address=Web3.to_checksum_address(VAULT_ADDRESS), abi=VAU
 
 def get_buy_sell_rates() -> tuple[Decimal, Decimal]:
     """Return (buy_rate, sell_rate) read directly from VESCVault on Base.
-    sell = rate used for mint (more VES per dollar)
-    buy  = rate used for burn (fewer VES per dollar)
+    buy  > sell — spread is the protocol margin.
+    buy  = crixtoRecharge rate: used for mint (more VES per dollar)
+    sell = crixtoWithdraw rate: used for burn (less USDC back per VESC)
     """
-    sell_raw = vault.functions.sellRate().call()
     buy_raw  = vault.functions.buyRate().call()
-    sell = Decimal(sell_raw) / Decimal(10**18)
+    sell_raw = vault.functions.sellRate().call()
     buy  = Decimal(buy_raw)  / Decimal(10**18)
+    sell = Decimal(sell_raw) / Decimal(10**18)
     return buy, sell
 
 
 def format_rates(buy: Decimal, sell: Decimal) -> str:
     return (
-        f"🟢 *Buy  (mint VESC):* `1 USD = {sell:,.4f} VES`\n"
-        f"🔴 *Sell (burn VESC):* `1 USD = {buy:,.4f} VES`\n\n"
-        f"  1 VESC ≈ `{(1/sell):.8f} USDC` (mint)\n"
-        f"  1 VESC ≈ `{(1/buy):.8f} USDC` (burn)"
+        f"🟢 *Buy  (mint VESC):* `1 USD = {buy:,.4f} VES`\n"
+        f"🔴 *Sell (burn VESC):* `1 USD = {sell:,.4f} VES`\n\n"
+        f"  1 VESC ≈ `{(1/buy):.8f} USDC` (mint)\n"
+        f"  1 VESC ≈ `{(1/sell):.8f} USDC` (burn)"
     )
 
 
@@ -121,21 +122,21 @@ async def cmd_quote(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if direction == "mint":
-        vesc_out = amount * sell
+        vesc_out = amount * buy
         await update.message.reply_text(
             f"🪙 *Mint Quote*\n\n"
             f"  Pay: `{amount:,.2f} USDC`\n"
             f"  Get: `{vesc_out:,.4f} VESC`\n\n"
-            f"  Buy rate: `1 USD = {sell:,.4f} VES`",
+            f"  Buy rate: `1 USD = {buy:,.4f} VES`",
             parse_mode="Markdown",
         )
     else:
-        usdc_out = amount / buy
+        usdc_out = amount / sell
         await update.message.reply_text(
             f"🔥 *Burn Quote*\n\n"
             f"  Burn: `{amount:,.4f} VESC`\n"
             f"  Get:  `{usdc_out:,.6f} USDC`\n\n"
-            f"  Sell rate: `1 USD = {buy:,.4f} VES`",
+            f"  Sell rate: `1 USD = {sell:,.4f} VES`",
             parse_mode="Markdown",
         )
 

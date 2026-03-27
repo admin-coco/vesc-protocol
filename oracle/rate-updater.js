@@ -101,8 +101,8 @@ async function fetchFxRates() {
     throw new Error(`Unexpected FX API response: ${JSON.stringify(data)}`);
   }
 
-  // sellRate: crixtoWithdraw — USDC → VES (user minting VESC gets more VES per dollar)
-  // buyRate:  crixtoRecharge — VES → USDC (user burning VESC gets fewer VES per dollar)
+  // buyRate:  crixtoRecharge — user buys VES (mints VESC), gets more VES per dollar
+  // sellRate: crixtoWithdraw — user sells VES (burns VESC), gets fewer VES per dollar
   const sellEntry = data.crixtoExchangeRates.find(r => r.provider === "coco" && r.transactionType === "crixtoWithdraw");
   const buyEntry  = data.crixtoExchangeRates.find(r => r.provider === "coco" && r.transactionType === "crixtoRecharge");
 
@@ -121,9 +121,9 @@ async function fetchFxRates() {
 // ─── On-chain helpers ──────────────────────────────────────────────────────
 
 const VAULT_ABI = [
-  "function sellRate() view returns (uint256)",
   "function buyRate() view returns (uint256)",
-  "function setRates(uint256 newSellRate, uint256 newBuyRate) external",
+  "function sellRate() view returns (uint256)",
+  "function setRates(uint256 newBuyRate, uint256 newSellRate) external",
 ];
 
 async function getProvider() {

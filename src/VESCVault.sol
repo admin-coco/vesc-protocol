@@ -14,15 +14,19 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
     VESCToken public immutable vesc;
     IERC20    public immutable usdc;
 
-    uint256 public sellRate;       // VES per USD used for mint, 18 decimals (more VES per dollar)
-    uint256 public buyRate;        // VES per USD used for burn, 18 decimals (fewer VES per dollar)
+    // Both rates: VES per USD, 18 decimals.
+    // buyRate  > sellRate — the spread between them is the protocol margin.
+    // mint() uses buyRate:  user deposits USDC, receives more VESC per dollar.
+    // burn() uses sellRate: user burns VESC, receives less USDC per VESC.
+    uint256 public buyRate;
+    uint256 public sellRate;
+
     uint256 public constant FEE_BPS = 25;   // 0.25%
     uint256 public constant BPS     = 10_000;
-    uint256 public constant MAX_RATE_CHANGE_BPS     = 2_000;       // 20% max per update
-    uint256 public constant MAX_RATE_STALENESS       = 30 minutes;
-    uint256 public constant MIN_RATE_UPDATE_INTERVAL = 10 minutes;
+    uint256 public constant MAX_RATE_CHANGE_BPS      = 2_000;      // 20% max per update
+    uint256 public constant MAX_RATE_STALENESS        = 30 minutes;
+    uint256 public constant MIN_RATE_UPDATE_INTERVAL  = 10 minutes;
 
-    // USDC has 6 decimals; used for scaling
     uint256 private constant USDC_SCALE = 1e6;
 
     address public rateUpdater;
@@ -50,9 +54,9 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
     error SwapFailed();
     error SwapProducedNoTokens();
     error SwapSlippageExceeded();
-    error BuyRateExceedsSellRate();
+    error SellRateExceedsBuyRate();
 
-    event RatesUpdated(uint256 oldSellRate, uint256 newSellRate, uint256 oldBuyRate, uint256 newBuyRate);
+    event RatesUpdated(uint256 oldBuyRate, uint256 newBuyRate, uint256 oldSellRate, uint256 newSellRate);
     event RateUpdaterSet(address indexed oldUpdater, address indexed newUpdater);
     event Minted(address indexed user, uint256 usdcIn, uint256 vescOut);
     event Burned(address indexed user, uint256 vescIn, uint256 usdcOut, uint256 fee);
@@ -67,14 +71,14 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
         _;
     }
 
-    constructor(address _usdc, address _vesc, uint256 initialSellRate, uint256 initialBuyRate) Ownable(msg.sender) {
+    constructor(address _usdc, address _vesc, uint256 initialBuyRate, uint256 initialSellRate) Ownable(msg.sender) {
         if (_usdc == address(0) || _vesc == address(0)) revert ZeroAddress();
-        if (initialSellRate == 0 || initialBuyRate == 0) revert RateZero();
-        if (initialBuyRate > initialSellRate) revert BuyRateExceedsSellRate();
+        if (initialBuyRate == 0 || initialSellRate == 0) revert RateZero();
+        if (initialSellRate > initialBuyRate) revert SellRateExceedsBuyRate();
         usdc = IERC20(_usdc);
         vesc = VESCToken(_vesc);
-        sellRate = initialSellRate;
         buyRate  = initialBuyRate;
+        sellRate = initialSellRate;
         lastRateUpdate = block.timestamp;
     }
 
@@ -95,28 +99,28 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
         usdc.safeTransfer(recipient, surplus);
     }
 
-    /// @notice Push both buy and sell rates on-chain atomically.
-    /// @param newSellRate  VES per USD for mint (higher — more VES per dollar)
-    /// @param newBuyRate   VES per USD for burn (lower — fewer VES per dollar)
-    function setRates(uint256 newSellRate, uint256 newBuyRate) external onlyRateUpdater {
-        if (newSellRate == 0 || newBuyRate == 0) revert RateZero();
+    /// @notice Push both rates on-chain atomically.
+    /// @param newBuyRate   VES per USD for mint — must be > newSellRate
+    /// @param newSellRate  VES per USD for burn — must be < newBuyRate
+    function setRates(uint256 newBuyRate, uint256 newSellRate) external onlyRateUpdater {
+        if (newBuyRate == 0 || newSellRate == 0) revert RateZero();
         if (block.timestamp - lastRateUpdate < MIN_RATE_UPDATE_INTERVAL) revert RateUpdateTooFrequent();
-        if (newBuyRate > newSellRate) revert BuyRateExceedsSellRate();
+        if (newSellRate > newBuyRate) revert SellRateExceedsBuyRate();
 
-        uint256 oldSell = sellRate;
         uint256 oldBuy  = buyRate;
+        uint256 oldSell = sellRate;
+
+        uint256 buyDelta  = newBuyRate  > oldBuy  ? newBuyRate  - oldBuy  : oldBuy  - newBuyRate;
+        if (buyDelta  * BPS > oldBuy  * MAX_RATE_CHANGE_BPS) revert RateChangeTooLarge();
 
         uint256 sellDelta = newSellRate > oldSell ? newSellRate - oldSell : oldSell - newSellRate;
         if (sellDelta * BPS > oldSell * MAX_RATE_CHANGE_BPS) revert RateChangeTooLarge();
 
-        uint256 buyDelta = newBuyRate > oldBuy ? newBuyRate - oldBuy : oldBuy - newBuyRate;
-        if (buyDelta * BPS > oldBuy * MAX_RATE_CHANGE_BPS) revert RateChangeTooLarge();
-
-        sellRate = newSellRate;
         buyRate  = newBuyRate;
+        sellRate = newSellRate;
         lastRateUpdate = block.timestamp;
 
-        emit RatesUpdated(oldSell, newSellRate, oldBuy, newBuyRate);
+        emit RatesUpdated(oldBuy, newBuyRate, oldSell, newSellRate);
         _checkInvariant();
     }
 
@@ -164,14 +168,14 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
 
     // ── User: Mint ───────────────────────────────────────────────────────────
 
-    /// @notice Deposit USDC, receive VESC at current sell rate
+    /// @notice Deposit USDC, receive VESC at current buy rate (more VES per dollar)
     /// @param usdcAmount  Amount of USDC to deposit (6 decimals)
     /// @param minVescOut  Minimum VESC to receive
     function mint(uint256 usdcAmount, uint256 minVescOut) external nonReentrant whenNotPaused {
         if (usdcAmount == 0) revert UsdcAmountZero();
         if (block.timestamp - lastRateUpdate > MAX_RATE_STALENESS) revert RateStale();
 
-        uint256 vescOut = usdcAmount * sellRate / USDC_SCALE;
+        uint256 vescOut = usdcAmount * buyRate / USDC_SCALE;
         if (vescOut < minVescOut) revert SlippageExceeded();
 
         usdc.safeTransferFrom(msg.sender, address(this), usdcAmount);
@@ -182,14 +186,14 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
 
     // ── User: Burn ───────────────────────────────────────────────────────────
 
-    /// @notice Burn VESC, receive USDC minus 0.25% fee, at current buy rate
+    /// @notice Burn VESC, receive USDC minus 0.25% fee, at current sell rate (less USDC back)
     /// @param vescAmount  Amount of VESC to burn (18 decimals)
     /// @param minUsdcOut  Minimum USDC to receive
     function burn(uint256 vescAmount, uint256 minUsdcOut) external nonReentrant whenNotPaused {
         if (vescAmount == 0) revert VescAmountZero();
         if (block.timestamp - lastRateUpdate > MAX_RATE_STALENESS) revert RateStale();
 
-        uint256 grossUsdc = vescAmount * USDC_SCALE / buyRate;
+        uint256 grossUsdc = vescAmount * USDC_SCALE / sellRate;
         uint256 fee       = grossUsdc * FEE_BPS / BPS;
         uint256 netUsdc   = grossUsdc - fee;
         if (netUsdc < minUsdcOut) revert SlippageExceeded();
@@ -222,21 +226,21 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
 
     // ── View ─────────────────────────────────────────────────────────────────
 
-    /// @notice Preview VESC out for a given USDC deposit (uses sell rate)
+    /// @notice Preview VESC out for a given USDC deposit (uses buy rate)
     function previewMint(uint256 usdcAmount) external view returns (uint256 vescOut) {
-        vescOut = usdcAmount * sellRate / USDC_SCALE;
+        vescOut = usdcAmount * buyRate / USDC_SCALE;
     }
 
-    /// @notice Preview net USDC out for a given VESC burn (uses buy rate)
+    /// @notice Preview net USDC out for a given VESC burn (uses sell rate)
     function previewBurn(uint256 vescAmount) external view returns (uint256 netUsdc, uint256 fee) {
-        uint256 grossUsdc = vescAmount * USDC_SCALE / buyRate;
+        uint256 grossUsdc = vescAmount * USDC_SCALE / sellRate;
         fee     = grossUsdc * FEE_BPS / BPS;
         netUsdc = grossUsdc - fee;
     }
 
-    /// @notice USDC required to fully back current VESC supply at current buy rate
+    /// @notice USDC required to fully back current VESC supply at sell rate (worst-case redemption)
     function requiredReserves() public view returns (uint256) {
-        return vesc.totalSupply() * USDC_SCALE / buyRate;
+        return vesc.totalSupply() * USDC_SCALE / sellRate;
     }
 
     /// @notice Current USDC balance held by vault

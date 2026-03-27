@@ -18,24 +18,22 @@ contract DeployVESC is Script {
     function run() external {
         require(RATE_UPDATER != address(0), "Set RATE_UPDATER before deploying");
 
-        // Initial rates — oracle will update these within 15 minutes of first run.
-        // sellRate: VES per USD for mint (more VES per dollar — crixtoWithdraw)
-        // buyRate:  VES per USD for burn (fewer VES per dollar — crixtoRecharge)
-        // Set conservatively close to current market; buyRate must be < sellRate.
-        uint256 initialSellRate = 612 * 1e18;  // ~612 VES/USD sell (update to current before deploying)
-        uint256 initialBuyRate  = 600 * 1e18;  // ~600 VES/USD buy  (update to current before deploying)
+        // Current rates from Coco FX API (as of 2026-03-27):
+        //   crixtoRecharge (buy):  704.57 VES/USD — user mints VESC at this rate
+        //   crixtoWithdraw (sell): 612.43 VES/USD — user burns VESC at this rate
+        // buyRate > sellRate — the spread is the protocol margin.
+        // Oracle will refresh these within 15 minutes of its first run post-deploy.
+        uint256 initialBuyRate  = 704 * 1e18;
+        uint256 initialSellRate = 612 * 1e18;
 
         vm.startBroadcast();
 
         VESCToken token = new VESCToken();
-        VESCVault vault = new VESCVault(USDC, address(token), initialSellRate, initialBuyRate);
+        VESCVault vault = new VESCVault(USDC, address(token), initialBuyRate, initialSellRate);
         token.setVault(address(vault));
-        token.renounceOwnership(); // vault is locked in; owner role is permanently inert
+        token.renounceOwnership();
         vault.setRateUpdater(RATE_UPDATER);
-        vault.setRescueToken(USDT, true);  // pre-approve USDT as emergency escape asset
-        // NOTE: vault ownership stays with deployer initially.
-        // Once volume warrants it, transfer to a Gnosis Safe multisig via:
-        // vault.transferOwnership(<multisig>)
+        vault.setRescueToken(USDT, true);
 
         vm.stopBroadcast();
     }
