@@ -2,6 +2,7 @@
 pragma solidity 0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {VESCToken} from "../src/VESCToken.sol";
 import {VESCVault} from "../src/VESCVault.sol";
 
@@ -63,7 +64,11 @@ contract VESCVaultTest is Test {
     function setUp() public {
         usdc  = new MockUSDC();
         token = new VESCToken();
-        vault = new VESCVault(address(usdc), address(token), BUY_RATE, SELL_RATE);
+        VESCVault impl = new VESCVault();
+        vault = VESCVault(address(new ERC1967Proxy(
+            address(impl),
+            abi.encodeCall(VESCVault.initialize, (address(usdc), address(token), BUY_RATE, SELL_RATE))
+        )));
         token.setVault(address(vault));
     }
 
@@ -325,15 +330,23 @@ contract VESCVaultTest is Test {
     // ── Constructor guards ───────────────────────────────────────────────────
 
     function test_RateZero_Reverts() public {
-        VESCToken t = new VESCToken();
+        VESCToken t    = new VESCToken();
+        VESCVault impl = new VESCVault();
         vm.expectRevert(VESCVault.RateZero.selector);
-        new VESCVault(address(usdc), address(t), 0, 0);
+        new ERC1967Proxy(
+            address(impl),
+            abi.encodeCall(VESCVault.initialize, (address(usdc), address(t), 0, 0))
+        );
     }
 
     function test_SellExceedsBuy_Constructor_Reverts() public {
-        VESCToken t = new VESCToken();
+        VESCToken t    = new VESCToken();
+        VESCVault impl = new VESCVault();
         vm.expectRevert(VESCVault.SellRateExceedsBuyRate.selector);
-        new VESCVault(address(usdc), address(t), SELL_RATE, BUY_RATE); // swapped
+        new ERC1967Proxy(
+            address(impl),
+            abi.encodeCall(VESCVault.initialize, (address(usdc), address(t), SELL_RATE, BUY_RATE))
+        );
     }
 
     // ── Fuzz: mint ───────────────────────────────────────────────────────────

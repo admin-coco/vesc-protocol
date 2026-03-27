@@ -2,6 +2,7 @@
 pragma solidity 0.8.24;
 
 import {Script} from "forge-std/Script.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {VESCToken} from "../src/VESCToken.sol";
 import {VESCVault} from "../src/VESCVault.sol";
 
@@ -29,7 +30,20 @@ contract DeployVESC is Script {
         vm.startBroadcast();
 
         VESCToken token = new VESCToken();
-        VESCVault vault = new VESCVault(USDC, address(token), initialBuyRate, initialSellRate);
+
+        // Deploy implementation (constructor disables initializers)
+        VESCVault impl = new VESCVault();
+
+        // Encode initialize() call
+        bytes memory initData = abi.encodeCall(
+            VESCVault.initialize,
+            (USDC, address(token), initialBuyRate, initialSellRate)
+        );
+
+        // Deploy proxy — initialize() runs inside the constructor
+        ERC1967Proxy proxy = new ERC1967Proxy(address(impl), initData);
+        VESCVault vault = VESCVault(address(proxy));
+
         token.setVault(address(vault));
         token.renounceOwnership();
         vault.setRateUpdater(RATE_UPDATER);

@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {VESCToken} from "./VESCToken.sol";
+import {OwnableUpgradeable}        from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {PausableUpgradeable}       from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {UUPSUpgradeable}           from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Initializable}             from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {SafeERC20}                 from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20}                    from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {VESCToken}                 from "./VESCToken.sol";
 
-contract VESCVault is Ownable, Pausable, ReentrancyGuard {
+contract VESCVault is
+    Initializable,
+    OwnableUpgradeable,
+    PausableUpgradeable,
+    ReentrancyGuardUpgradeable,
+    UUPSUpgradeable
+{
     using SafeERC20 for IERC20;
 
-    VESCToken public immutable vesc;
-    IERC20    public immutable usdc;
+    VESCToken public vesc;
+    IERC20    public usdc;
 
     // Both rates: VES per USD, 18 decimals.
     // buyRate  > sellRate — the spread between them is the protocol margin.
@@ -34,6 +42,9 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
     bool    public emergencyMode;
 
     mapping(address => bool) public rescueTokens;
+
+    // Storage gap for future upgrades
+    uint256[50] private __gap;
 
     error RateZero();
     error UsdcAmountZero();
@@ -71,16 +82,36 @@ contract VESCVault is Ownable, Pausable, ReentrancyGuard {
         _;
     }
 
-    constructor(address _usdc, address _vesc, uint256 initialBuyRate, uint256 initialSellRate) Ownable(msg.sender) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(
+        address _usdc,
+        address _vesc,
+        uint256 initialBuyRate,
+        uint256 initialSellRate
+    ) external initializer {
         if (_usdc == address(0) || _vesc == address(0)) revert ZeroAddress();
         if (initialBuyRate == 0 || initialSellRate == 0) revert RateZero();
         if (initialSellRate > initialBuyRate) revert SellRateExceedsBuyRate();
+
+        __Ownable_init(msg.sender);
+        __Pausable_init();
+        __ReentrancyGuard_init();
+        __UUPSUpgradeable_init();
+
         usdc = IERC20(_usdc);
         vesc = VESCToken(_vesc);
         buyRate  = initialBuyRate;
         sellRate = initialSellRate;
         lastRateUpdate = block.timestamp;
     }
+
+    // ── UUPS ─────────────────────────────────────────────────────────────────
+
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // ── Admin ────────────────────────────────────────────────────────────────
 
