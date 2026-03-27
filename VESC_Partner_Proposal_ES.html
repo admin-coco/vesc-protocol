@@ -1,0 +1,1016 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>VESC — Propuesta de Alianza Estratégica</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+    font-size: 12.5px;
+    color: #0f172a;
+    background: #f8fafc;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    width: 210mm;
+    margin: 0 auto;
+    background: #fff;
+  }
+
+  /* ────────────────────────────────────────
+     COVER
+  ──────────────────────────────────────── */
+  .cover {
+    background: linear-gradient(135deg, #071828 0%, #0d2a42 50%, #0a3d52 100%);
+    padding: 42px 44px 36px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* decorative circles */
+  .cover::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 280px; height: 280px;
+    background: radial-gradient(circle, rgba(29,191,173,0.14) 0%, transparent 65%);
+    border-radius: 50%;
+  }
+  .cover::after {
+    content: '';
+    position: absolute;
+    bottom: -80px; left: 30%;
+    width: 340px; height: 340px;
+    background: radial-gradient(circle, rgba(29,191,173,0.07) 0%, transparent 60%);
+    border-radius: 50%;
+  }
+
+  .cover-inner { position: relative; z-index: 1; }
+
+  .cover-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(29,191,173,0.12);
+    border: 1px solid rgba(29,191,173,0.3);
+    border-radius: 20px;
+    padding: 4px 12px;
+    margin-bottom: 18px;
+  }
+  .cover-eyebrow .dot {
+    width: 6px; height: 6px;
+    background: #1dbfad;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+  }
+  .cover-eyebrow span {
+    font-size: 8.5px;
+    font-weight: 600;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #1dbfad;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .cover-title {
+    font-size: 34px;
+    font-weight: 900;
+    color: #fff;
+    line-height: 1.1;
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+  }
+  .cover-title .highlight {
+    background: linear-gradient(90deg, #1dbfad, #38e8d5);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .cover-subtitle {
+    font-size: 12px;
+    font-weight: 400;
+    color: #94a3b8;
+    line-height: 1.6;
+    max-width: 480px;
+    margin-bottom: 28px;
+  }
+
+  .cover-divider {
+    height: 1px;
+    background: linear-gradient(90deg, rgba(29,191,173,0.4), rgba(29,191,173,0.05));
+    margin-bottom: 18px;
+  }
+
+  .cover-meta {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+  }
+  .cover-meta-item {
+    padding: 0 16px 0 0;
+    border-right: 1px solid rgba(255,255,255,0.07);
+  }
+  .cover-meta-item:first-child { padding-left: 0; }
+  .cover-meta-item:last-child { border-right: none; }
+  .cover-meta-item .meta-label {
+    font-size: 8px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #475569;
+    margin-bottom: 3px;
+  }
+  .cover-meta-item .meta-value {
+    font-size: 9.5px;
+    font-weight: 600;
+    color: #e2e8f0;
+  }
+
+  /* ────────────────────────────────────────
+     BODY CONTENT
+  ──────────────────────────────────────── */
+  .content {
+    padding: 28px 36px 24px;
+  }
+
+  /* ── SECTION HEADER ── */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 22px 0 12px;
+  }
+  .section-header:first-child { margin-top: 0; }
+
+  .section-num {
+    width: 26px; height: 26px;
+    background: linear-gradient(135deg, #0d2137, #0a3d52);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+    font-weight: 800;
+    color: #1dbfad;
+    flex-shrink: 0;
+    box-shadow: 0 2px 8px rgba(13,33,55,0.25);
+  }
+
+  .section-header h2 {
+    font-size: 14px;
+    font-weight: 700;
+    color: #0f172a;
+    letter-spacing: -0.2px;
+  }
+  .section-header h2 .h2-line {
+    display: block;
+    height: 2px;
+    width: 32px;
+    background: linear-gradient(90deg, #1dbfad, transparent);
+    margin-top: 4px;
+    border-radius: 2px;
+  }
+
+  /* ── VESC INTRO ── */
+  .vesc-intro {
+    background: linear-gradient(135deg, #f0fdf9, #ecfdf5);
+    border: 1px solid #a7f3d0;
+    border-radius: 10px;
+    padding: 16px 18px;
+    margin-bottom: 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .vesc-intro::before {
+    content: '"';
+    position: absolute;
+    top: -8px; right: 14px;
+    font-size: 80px;
+    font-weight: 900;
+    color: rgba(29,191,173,0.08);
+    font-family: Georgia, serif;
+    line-height: 1;
+  }
+  .vesc-intro p {
+    font-size: 10.5px;
+    color: #1e293b;
+    line-height: 1.75;
+    margin-bottom: 7px;
+    position: relative;
+  }
+  .vesc-intro p:last-child { margin-bottom: 0; }
+  .vesc-intro strong { color: #064e3b; font-weight: 700; }
+
+  /* ── FLOW DIAGRAM ── */
+  .flow-diagram {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin: 10px 0;
+  }
+  .flow-diagram-label {
+    font-size: 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #64748b;
+    margin-bottom: 10px;
+  }
+  .flow-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 7px;
+    flex-wrap: nowrap;
+  }
+  .flow-row:last-child { margin-bottom: 0; }
+  .flow-step {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: #0d2137;
+    color: #e2e8f0;
+    font-size: 8.5px;
+    font-weight: 500;
+    padding: 5px 10px;
+    border-radius: 6px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .flow-step.teal {
+    background: linear-gradient(135deg, #0d9488, #0f766e);
+    color: #fff;
+    font-weight: 600;
+  }
+  .flow-step .step-icon { font-size: 10px; }
+  .flow-arrow {
+    color: #1dbfad;
+    font-size: 14px;
+    font-weight: 300;
+    flex-shrink: 0;
+  }
+  .flow-note {
+    font-size: 8px;
+    color: #94a3b8;
+    font-style: italic;
+    flex-shrink: 0;
+  }
+
+  /* ── STATS ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin: 14px 0;
+  }
+  .stat-card {
+    background: linear-gradient(135deg, #071828 0%, #0d2a42 100%);
+    border-radius: 10px;
+    padding: 14px 16px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(7,24,40,0.2);
+  }
+  .stat-card::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, #1dbfad, transparent);
+  }
+  .stat-num {
+    font-size: 22px;
+    font-weight: 900;
+    color: #1dbfad;
+    line-height: 1;
+    letter-spacing: -1px;
+  }
+  .stat-label {
+    font-size: 8.5px;
+    color: #64748b;
+    margin-top: 5px;
+    line-height: 1.4;
+  }
+
+  /* ── DIVIDER ── */
+  .divider {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #e2e8f0 20%, #e2e8f0 80%, transparent);
+    margin: 18px 0;
+  }
+
+  /* ── OPERATIVO FLOW ── */
+  .op-flow {
+    background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+  }
+  .op-flow-title {
+    font-size: 8.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #475569;
+    margin-bottom: 10px;
+  }
+
+  /* ── MODEL CARDS ── */
+  .model-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+  .model-card {
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+    border: 1px solid #e2e8f0;
+    display: flex;
+    flex-direction: column;
+  }
+  .model-card-header {
+    padding: 12px 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .model-card:nth-child(1) .model-card-header { background: linear-gradient(135deg, #0d2137, #134e6f); }
+  .model-card:nth-child(2) .model-card-header { background: linear-gradient(135deg, #134e4a, #0f766e); }
+  .model-card:nth-child(3) .model-card-header { background: linear-gradient(135deg, #2d1b69, #4c1d95); }
+  .model-card-header::after {
+    content: '';
+    position: absolute;
+    top: -20px; right: -20px;
+    width: 70px; height: 70px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 50%;
+  }
+  .model-num {
+    font-size: 7.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: rgba(255,255,255,0.5);
+    margin-bottom: 3px;
+  }
+  .model-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.2;
+  }
+  .model-card-body {
+    padding: 12px 14px;
+    background: #fff;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .model-card-body p {
+    font-size: 9px;
+    color: #475569;
+    line-height: 1.65;
+    margin-bottom: 10px;
+    flex: 1;
+  }
+  .earn-label {
+    font-size: 7.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #047857;
+    margin-bottom: 5px;
+  }
+  .earn-item {
+    font-size: 8.5px;
+    color: #1e293b;
+    padding: 3px 0 3px 14px;
+    position: relative;
+    line-height: 1.4;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  .earn-item:last-of-type { border-bottom: none; }
+  .earn-item::before {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 8px;
+    width: 6px; height: 6px;
+    background: #1dbfad;
+    border-radius: 50%;
+  }
+  .model-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 7.5px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 20px;
+    margin-top: 8px;
+    letter-spacing: 0.3px;
+  }
+  .tag-easy     { background: #d1fae5; color: #065f46; }
+  .tag-medium   { background: #fef3c7; color: #92400e; }
+  .tag-advanced { background: #ede9fe; color: #4c1d95; }
+
+  /* ── UNISWAP FLOW ── */
+  .uni-flow {
+    background: linear-gradient(135deg, #f8fafc, #f0f9ff);
+    border: 1px solid #bae6fd;
+    border-radius: 10px;
+    padding: 13px 15px;
+    margin-bottom: 12px;
+  }
+  .uni-flow-title {
+    font-size: 8.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: #0369a1;
+    margin-bottom: 10px;
+  }
+
+  /* ── TABLE ── */
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    margin-bottom: 8px;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  }
+  thead tr { background: linear-gradient(135deg, #0d2137, #0a3d52); }
+  thead th {
+    padding: 8px 11px;
+    text-align: left;
+    color: #94a3b8;
+    font-size: 8.5px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  tbody tr:nth-child(even) { background: #f8fafc; }
+  tbody tr:nth-child(odd)  { background: #fff; }
+  td {
+    padding: 7px 11px;
+    border-bottom: 1px solid #f1f5f9;
+    font-size: 9.5px;
+    line-height: 1.5;
+    color: #334155;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  .td-green { color: #047857; font-weight: 700; }
+  .td-total td {
+    background: linear-gradient(135deg, #e0f7f4, #d1fae5) !important;
+    font-weight: 700;
+    color: #0d2137;
+  }
+
+  /* ── RISK CARDS ── */
+  .risk-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 9px;
+    margin-bottom: 14px;
+  }
+  .risk-card {
+    border-radius: 10px;
+    padding: 12px 14px;
+    border: 1px solid;
+    position: relative;
+    overflow: hidden;
+  }
+  .risk-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 3px; height: 100%;
+  }
+  .risk-high {
+    background: linear-gradient(135deg, #fff5f5, #fef2f2);
+    border-color: #fecaca;
+  }
+  .risk-high::before { background: linear-gradient(180deg, #ef4444, #dc2626); }
+  .risk-medium {
+    background: linear-gradient(135deg, #fffbeb, #fff8e1);
+    border-color: #fde68a;
+  }
+  .risk-medium::before { background: linear-gradient(180deg, #f59e0b, #d97706); }
+
+  .risk-icon {
+    font-size: 16px;
+    margin-bottom: 5px;
+    display: block;
+  }
+  .risk-title {
+    font-size: 10px;
+    font-weight: 700;
+    margin-bottom: 5px;
+    letter-spacing: -0.1px;
+  }
+  .risk-high .risk-title   { color: #7f1d1d; }
+  .risk-medium .risk-title { color: #78350f; }
+  .risk-card p {
+    font-size: 8.5px;
+    line-height: 1.65;
+    color: #475569;
+  }
+  .mitigation {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    margin-top: 7px;
+    padding-top: 7px;
+    border-top: 1px solid rgba(0,0,0,0.06);
+    font-size: 8px;
+    color: #047857;
+    font-style: italic;
+    line-height: 1.5;
+  }
+  .mitigation::before {
+    content: '→';
+    font-style: normal;
+    font-weight: 700;
+    color: #1dbfad;
+    flex-shrink: 0;
+    margin-top: 0;
+  }
+
+  /* ── CTA BOX ── */
+  .cta-box {
+    background: linear-gradient(135deg, #071828 0%, #0d2a42 60%, #0a3d52 100%);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-top: 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 24px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(7,24,40,0.25);
+  }
+  .cta-box::before {
+    content: '';
+    position: absolute;
+    top: -50px; right: -50px;
+    width: 200px; height: 200px;
+    background: radial-gradient(circle, rgba(29,191,173,0.12) 0%, transparent 65%);
+    border-radius: 50%;
+  }
+  .cta-box::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, #1dbfad, rgba(29,191,173,0.1));
+  }
+  .cta-text { position: relative; }
+  .cta-text h3 {
+    font-size: 14px;
+    font-weight: 800;
+    color: #fff;
+    margin-bottom: 5px;
+    letter-spacing: -0.3px;
+  }
+  .cta-text p {
+    font-size: 9.5px;
+    color: #64748b;
+    line-height: 1.6;
+    max-width: 340px;
+  }
+  .cta-contact {
+    text-align: right;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .cta-contact .contact-label {
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #475569;
+    margin-bottom: 4px;
+  }
+  .cta-contact .contact-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: #1dbfad;
+    margin-bottom: 6px;
+  }
+  .cta-contact .contract-badge {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 7.5px;
+    color: #475569;
+    font-family: 'Courier New', monospace;
+    line-height: 1.6;
+    text-align: left;
+  }
+
+  /* ── FOOTER ── */
+  .doc-footer {
+    border-top: 1px solid #f1f5f9;
+    padding: 10px 36px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 8px;
+    color: #94a3b8;
+  }
+  .footer-logo {
+    font-size: 10px;
+    font-weight: 800;
+    color: #0d2137;
+    letter-spacing: -0.3px;
+  }
+  .footer-logo span { color: #1dbfad; }
+
+  /* ── BODY TEXT ── */
+  .body-text {
+    font-size: 10.5px;
+    line-height: 1.75;
+    color: #334155;
+    margin-bottom: 12px;
+  }
+  .body-text strong { color: #0f172a; font-weight: 700; }
+
+  .footnote {
+    font-size: 8px;
+    color: #94a3b8;
+    font-style: italic;
+    margin-bottom: 14px;
+  }
+
+  @media print {
+    body { background: #fff; }
+    @page { size: A4; margin: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ══════════════════════════════════
+       COVER
+  ══════════════════════════════════ -->
+  <div class="cover">
+    <div class="cover-inner">
+      <div class="cover-eyebrow">
+        <div class="dot"></div>
+        <span>Propuesta de Alianza Estratégica · Confidencial</span>
+      </div>
+      <div class="cover-title">
+        VESC: El Bolívar<br>
+        <span class="highlight">en la Blockchain</span>
+      </div>
+      <p class="cover-subtitle">
+        Una oportunidad para convertirse en el puente entre el sistema financiero venezolano
+        y la economía cripto global — con ingresos recurrentes desde el primer día.
+      </p>
+      <div class="cover-divider"></div>
+      <div class="cover-meta">
+        <div class="cover-meta-item">
+          <div class="meta-label">Proyecto</div>
+          <div class="meta-value">VESC Protocol · Coco Wallet</div>
+        </div>
+        <div class="cover-meta-item" style="padding-left:16px;">
+          <div class="meta-label">Red Blockchain</div>
+          <div class="meta-value">Base Mainnet · Chain ID 8453</div>
+        </div>
+        <div class="cover-meta-item" style="padding-left:16px;">
+          <div class="meta-label">Respaldo</div>
+          <div class="meta-value">Y Combinator · Marzo 2026</div>
+        </div>
+        <div class="cover-meta-item" style="padding-left:16px;">
+          <div class="meta-label">Documento</div>
+          <div class="meta-value">Socio On/Off-Ramp VES ↔ VESC</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════
+       BODY
+  ══════════════════════════════════ -->
+  <div class="content">
+
+    <!-- ── 1. QUÉ ES VESC ── -->
+    <div class="section-header">
+      <div class="section-num">1</div>
+      <h2>¿Qué es VESC? <span class="h2-line"></span></h2>
+    </div>
+
+    <div class="vesc-intro">
+      <p>
+        <strong>VESC es un token digital que representa exactamente 1 Bolívar Venezolano (VES)</strong>,
+        respaldado en todo momento por USDC (dólar digital) depositado en un contrato inteligente
+        no custodial en la blockchain Base. No hay reserva fraccionaria. No hay contraparte.
+        Cada VESC en circulación tiene su equivalente en dólares guardado en el protocolo.
+      </p>
+      <p>
+        La tasa VES/USD se actualiza cada 15 minutos desde el mercado paralelo venezolano y se publica
+        automáticamente en la blockchain. El usuario siempre recibe el precio justo del mercado real.
+      </p>
+    </div>
+
+    <div class="flow-diagram">
+      <div class="flow-diagram-label">Mecánica del protocolo</div>
+      <div class="flow-row">
+        <div class="flow-step"><span class="step-icon">💵</span> Usuario deposita USDC</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step teal">⚡ Protocolo VESC</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><span class="step-icon">🪙</span> Recibe VESC al tipo de cambio</div>
+        <div class="flow-note">&nbsp;(ej. $1 → 410 VESC)</div>
+      </div>
+      <div class="flow-row">
+        <div class="flow-step"><span class="step-icon">🔥</span> Usuario quema VESC</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step teal">⚡ Protocolo VESC</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><span class="step-icon">💵</span> Recibe USDC al tipo de cambio</div>
+        <div class="flow-note">&nbsp;(comisión 0.25%)</div>
+      </div>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-num">1 : 1</div>
+        <div class="stat-label">Cada VESC respaldado<br>por USDC en el contrato</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">15 min</div>
+        <div class="stat-label">Actualización automática<br>del tipo de cambio on-chain</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-num">0.25%</div>
+        <div class="stat-label">Única comisión del protocolo<br>(solo al redimir USDC)</div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <!-- ── 2. LA OPORTUNIDAD ── -->
+    <div class="section-header">
+      <div class="section-num">2</div>
+      <h2>La Oportunidad — On/Off Ramp VES ↔ VESC <span class="h2-line"></span></h2>
+    </div>
+
+    <p class="body-text">
+      Hoy no existe un puente automatizado entre el bolívar en cuentas bancarias venezolanas y VESC.
+      <strong>Tú serías ese puente.</strong> El usuario deposita bolívares en tu cuenta bancaria
+      local → el sistema confirma el pago → envía VESC automáticamente a su wallet.
+      Sin intermediarios adicionales. Sin papeles. Ingresos por cada transacción desde el día uno.
+    </p>
+
+    <div class="op-flow">
+      <div class="op-flow-title">Flujo operativo — totalmente automatizable</div>
+      <div class="flow-row">
+        <div class="flow-step"><span class="step-icon">🏦</span> Usuario envía Bs. a tu cuenta</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><span class="step-icon">✅</span> API confirma el pago</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step teal"><span class="step-icon">⚡</span> Sistema envía VESC a wallet</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><span class="step-icon">📱</span> Usuario usa VESC en Coco</div>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <!-- ── 3. MODELOS DE NEGOCIO ── -->
+    <div class="section-header">
+      <div class="section-num">3</div>
+      <h2>Modelos de Negocio para el Socio <span class="h2-line"></span></h2>
+    </div>
+
+    <div class="model-grid">
+
+      <div class="model-card">
+        <div class="model-card-header">
+          <div class="model-num">Opción A</div>
+          <div class="model-title">Comisión por Transacción</div>
+        </div>
+        <div class="model-card-body">
+          <p>
+            Cobras un porcentaje fijo sobre cada conversión VES→VESC y VESC→VES.
+            El modelo más simple. Coco te transfiere VESC al tipo de cambio y tú
+            aplicas tu margen al usuario final.
+          </p>
+          <div class="earn-label">Ingresos estimados</div>
+          <div class="earn-item">1–3% por transacción on-ramp</div>
+          <div class="earn-item">1–3% por transacción off-ramp</div>
+          <div class="earn-item">Volumen × margen = ingreso predecible</div>
+          <div class="model-tag tag-easy">✓ Más fácil de implementar</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-card-header">
+          <div class="model-num">Opción B</div>
+          <div class="model-title">Spread Cambiario</div>
+        </div>
+        <div class="model-card-body">
+          <p>
+            Operas como mesa de cambio digital. Compras VESC a tasa mercado y lo
+            vendes a una tasa ligeramente inferior. Igual que una casa de cambio,
+            pero automatizada y en cripto.
+          </p>
+          <div class="earn-label">Ingresos estimados</div>
+          <div class="earn-item">Spread de 0.5–2% en cada operación</div>
+          <div class="earn-item">Sin comisión fija — ganas en volumen</div>
+          <div class="earn-item">Mayor margen en alta demanda</div>
+          <div class="model-tag tag-medium">⚡ Requiere gestión de liquidez</div>
+        </div>
+      </div>
+
+      <div class="model-card">
+        <div class="model-card-header">
+          <div class="model-num">Opción C</div>
+          <div class="model-title">Híbrido + Revenue Share</div>
+        </div>
+        <div class="model-card-body">
+          <p>
+            Combinas comisión fija con participación en los ingresos del protocolo
+            VESC y del pool Uniswap. A mayor volumen que generes, mayor es tu
+            participación proporcional.
+          </p>
+          <div class="earn-label">Ingresos estimados</div>
+          <div class="earn-item">Comisión por transacción (1–2%)</div>
+          <div class="earn-item">% fees del protocolo VESC</div>
+          <div class="earn-item">Participación en fees Uniswap V3</div>
+          <div class="model-tag tag-advanced">★ Mayor potencial de ingreso</div>
+        </div>
+      </div>
+
+    </div>
+
+    <hr class="divider">
+
+    <!-- ── 4. UNISWAP V3 ── -->
+    <div class="section-header">
+      <div class="section-num">4</div>
+      <h2>Liquidez Global: Pool Uniswap V3 en Base <span class="h2-line"></span></h2>
+    </div>
+
+    <p class="body-text">
+      Para que VESC sea útil más allá de Venezuela, cualquier usuario en el mundo debe poder
+      intercambiarlo por USDC, ETH u otros tokens en cualquier blockchain EVM. Esto se logra
+      con un <strong>pool de liquidez VESC/USDC en Uniswap V3</strong> en Base, conectado a
+      Li.Fi para enrutamiento cross-chain automático a Ethereum, Arbitrum, Polygon, BNB y Optimism.
+    </p>
+
+    <div class="uni-flow">
+      <div class="uni-flow-title">Flujo de swap cross-chain para el usuario</div>
+      <div class="flow-row">
+        <div class="flow-step"><span class="step-icon">🪙</span> VESC en Coco Wallet</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step teal">Swap VESC→USDC · Uniswap V3 Base</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><span class="step-icon">🌉</span> Li.Fi bridge automático</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step"><span class="step-icon">💰</span> USDC / ETH en cualquier chain EVM</div>
+      </div>
+    </div>
+
+    <p style="font-size:9px;color:#64748b;font-style:italic;margin:8px 0 10px;">
+      El socio puede co-invertir en el pool y recibir una parte proporcional de todos los fees generados,
+      sin gestionar swaps manualmente.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Fuente de Ingreso</th>
+          <th>Tasa</th>
+          <th>Quién Paga</th>
+          <th>Ej. $1M vol/mes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Fee del pool Uniswap V3</td>
+          <td class="td-green">0.30% por swap</td>
+          <td>Cualquier usuario que intercambie VESC</td>
+          <td class="td-green">$3,000/mes</td>
+        </tr>
+        <tr>
+          <td>Fee de quema protocolo VESC</td>
+          <td class="td-green">0.25% por redención</td>
+          <td>Usuarios que convierten VESC → USDC</td>
+          <td class="td-green">$2,500/mes</td>
+        </tr>
+        <tr>
+          <td>Spread cambiario (opcional)</td>
+          <td class="td-green">0.25–0.50%</td>
+          <td>Incorporado en tasa oracle</td>
+          <td class="td-green">$2,500–$5,000/mes</td>
+        </tr>
+        <tr class="td-total">
+          <td><strong>Total estimado</strong></td>
+          <td><strong>~0.80–1.05%</strong></td>
+          <td>Por ciclo completo</td>
+          <td><strong>$8,000–$10,500/mes</strong></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p class="footnote">* Estimado sobre $1M USD de volumen mensual. Liquidez mínima recomendada: $50,000 USDC + equivalente en VESC en rango ±5%.</p>
+
+    <hr class="divider">
+
+    <!-- ── 5. RIESGOS ── -->
+    <div class="section-header">
+      <div class="section-num">5</div>
+      <h2>Riesgos y Consideraciones <span class="h2-line"></span></h2>
+    </div>
+
+    <div class="risk-grid">
+
+      <div class="risk-card risk-high">
+        <span class="risk-icon">📉</span>
+        <div class="risk-title">Devaluación Brusca del Bolívar</div>
+        <p>Si el mercado paralelo mueve el tipo de cambio abruptamente, el pool Uniswap puede quedar desbalanceado antes de que el oracle actualice, generando pérdida impermanente.</p>
+        <div class="mitigation">Bot de re-balanceo automático que ajusta el rango del pool cuando el oracle cambia más del 3%.</div>
+      </div>
+
+      <div class="risk-card risk-medium">
+        <span class="risk-icon">💧</span>
+        <div class="risk-title">Riesgo de Liquidez del Pool</div>
+        <p>Si el pool tiene poca liquidez, swaps grandes generan alto price impact y los usuarios reciben una tasa desfavorable, dañando la experiencia del producto.</p>
+        <div class="mitigation">Mantener mínimo $50,000 en el pool. Escalar liquidez proporcionalmente al volumen.</div>
+      </div>
+
+      <div class="risk-card risk-medium">
+        <span class="risk-icon">🔮</span>
+        <div class="risk-title">Dependencia del Oracle</div>
+        <p>Si el script de tasa falla o es manipulado, el precio on-chain diverge del mercado real, generando oportunidades de arbitraje contra el protocolo.</p>
+        <div class="mitigation">Múltiples fuentes de precio, alertas automáticas, circuit breaker si la tasa cambia más del 10% en 1h.</div>
+      </div>
+
+      <div class="risk-card risk-medium">
+        <span class="risk-icon">🏦</span>
+        <div class="risk-title">Riesgo de Contraparte Off-Ramp</div>
+        <p>En el off-ramp (VESC → Bs.), el socio debe tener liquidez en bolívares. Un pico de retiros puede exceder la liquidez disponible en el banco local.</p>
+        <div class="mitigation">Límites diarios de retiro, reserva de bolívares equivalente al volumen promedio de 3 días.</div>
+      </div>
+
+      <div class="risk-card risk-medium">
+        <span class="risk-icon">🔐</span>
+        <div class="risk-title">Riesgo de Smart Contract</div>
+        <p>Como cualquier protocolo DeFi, existe riesgo teórico de vulnerabilidad en el contrato. El código es simple y sin dependencias externas complejas, pero no ha sido auditado externamente.</p>
+        <div class="mitigation">Auditoría externa antes de escalar volumen. Límites de depósito en etapas iniciales.</div>
+      </div>
+
+    </div>
+
+    <!-- ── CTA ── -->
+    <div class="cta-box">
+      <div class="cta-text">
+        <h3>¿Listo para ser el puente<br>financiero de Venezuela?</h3>
+        <p>
+          Esta es una ventana de oportunidad temprana. VESC está desplegado en mainnet,
+          el protocolo funciona, y Coco Wallet tiene usuarios activos. Lo que falta es
+          el socio local que conecte el bolívar con la blockchain.
+        </p>
+      </div>
+      <div class="cta-contact">
+        <div class="contact-label">Contacto</div>
+        <div class="contact-name">Coco Wallet · cocowallet.app</div>
+        <div class="contract-badge">
+          VESC Token: 0x09b744cb7b515a694c3dc257835caab89ef1c270<br>
+          VESC Vault: 0x6adf72b9c56aab9225d242259bcd72857686190a<br>
+          Base Mainnet · Chain ID 8453
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+
+  <!-- ── FOOTER ── -->
+  <div class="doc-footer">
+    <div class="footer-logo">VESC<span>·</span>Protocol</div>
+    <span>Coco Wallet · Documento Confidencial · Marzo 2026</span>
+    <span>Respaldado por Y Combinator</span>
+  </div>
+
+</div><!-- /page -->
+</body>
+</html>

@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Coco Wallet — Chain & Token Support</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 10px;
+    color: #1a2a3a;
+    background: #fff;
+    padding: 18px 24px;
+  }
+
+  header {
+    background: #0d2137;
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 6px;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  header h1 { font-size: 14px; font-weight: 700; }
+  header p  { font-size: 9px; color: #7ecfc0; margin-top: 2px; }
+  header .meta { text-align: right; font-size: 9px; color: #7ecfc0; }
+
+  .section-label {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.9px;
+    color: #0d2137;
+    margin-bottom: 5px;
+    padding-left: 7px;
+    border-left: 3px solid #1dbfad;
+  }
+
+  .table-legend {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: #0d2137;
+    border-radius: 5px 5px 0 0;
+    padding: 7px 12px;
+    margin-bottom: 0;
+  }
+  .table-legend .leg-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+  }
+  .table-legend .leg-sep {
+    color: #1dbfad;
+    font-weight: 700;
+  }
+  .table-legend .leg-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .table-legend .swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .swatch-green  { background: #d1fae5; border: 1px solid #6ee7b7; }
+  .swatch-purple { background: #ede9fe; border: 1px solid #a78bfa; }
+  .swatch-red    { background: #fee2e2; border: 1px solid #fca5a5; }
+  .table-legend .leg-text {
+    font-size: 9.5px;
+    color: #e2e8f0;
+    font-weight: 500;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 11px;
+  }
+  thead tr { background: #1a3a56; }
+  thead th {
+    padding: 5px 7px;
+    text-align: left;
+    font-size: 9px;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: 0.2px;
+  }
+  tbody tr:nth-child(even) { background: #f4f8fb; }
+  tbody tr:nth-child(odd)  { background: #fff; }
+  /* live rows tinted */
+  tbody tr.live { background: #f0fdf4; }
+  tbody tr.live:nth-child(even) { background: #e8faf0; }
+  td {
+    padding: 5px 7px;
+    border-bottom: 1px solid #e3eaf2;
+    vertical-align: middle;
+    line-height: 1.5;
+  }
+
+  .chain-name { font-weight: 700; font-size: 10.5px; display: block; }
+  .badge {
+    display: inline-block;
+    font-size: 8px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 3px;
+    margin-top: 1px;
+    text-transform: uppercase;
+  }
+  .evm    { background: #dbeafe; color: #1e40af; }
+  .nonevm { background: #fef3c7; color: #92400e; }
+  .live-badge { background: #d1fae5; color: #065f46; }
+
+  .token {
+    display: inline-block;
+    background: #e0f7f4;
+    color: #0a5e57;
+    font-weight: 700;
+    font-size: 8.5px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    margin: 1px 2px 1px 0;
+    white-space: nowrap;
+  }
+  .token.new { background: #ede9fe; color: #4c1d95; }
+  .token.special { background: #fef3c7; color: #92400e; }
+  .token.weth { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+
+  .yes     { color: #047857; font-weight: 700; font-size: 9.5px; }
+  .no      { color: #c0ccd8; font-style: italic; font-size: 9px; }
+  .partial { color: #92400e; font-weight: 600; font-size: 9.5px; }
+  .warn    { color: #b45309; font-weight: 700; font-size: 9.5px; }
+
+  .dir {
+    display: block;
+    font-size: 8.5px;
+    margin-top: 1px;
+    color: #64748b;
+  }
+
+  /* Li.Fi column */
+  .lifi-yes  { color: #047857; font-weight: 700; font-size: 9.5px; }
+  .lifi-no   { color: #dc2626; font-weight: 700; font-size: 9.5px; }
+  .lifi-warn { color: #b45309; font-weight: 700; font-size: 9.5px; }
+
+  .note {
+    background: #fff8e1;
+    border-left: 3px solid #f59e0b;
+    padding: 7px 10px;
+    border-radius: 0 5px 5px 0;
+    font-size: 9px;
+    color: #78350f;
+    margin-bottom: 11px;
+    line-height: 1.65;
+  }
+  .note strong { font-weight: 700; }
+
+  .lifi-box {
+    background: #fef2f2;
+    border-left: 3px solid #ef4444;
+    padding: 7px 10px;
+    border-radius: 0 5px 5px 0;
+    font-size: 9px;
+    color: #7f1d1d;
+    margin-bottom: 11px;
+    line-height: 1.65;
+  }
+  .lifi-box strong { font-weight: 700; }
+
+  .legend-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 5px;
+    margin-bottom: 10px;
+  }
+  .legend-card {
+    background: #f4f8fb;
+    border: 1px solid #dde8f0;
+    border-radius: 5px;
+    padding: 6px 8px;
+  }
+  .legend-card .pname {
+    font-weight: 700;
+    font-size: 9.5px;
+    color: #0d2137;
+    margin-bottom: 3px;
+    border-bottom: 1px solid #dde8f0;
+    padding-bottom: 3px;
+  }
+  .legend-card .pdetail {
+    font-size: 8.5px;
+    color: #4a6078;
+    line-height: 1.55;
+    margin-top: 3px;
+  }
+  .ve-yes { color: #047857; font-weight: 700; }
+  .ve-no  { color: #dc2626; font-weight: 700; }
+
+  footer {
+    border-top: 1px solid #d1dce8;
+    padding-top: 6px;
+    font-size: 8px;
+    color: #94a3b8;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* ── DEV REFERENCE ── */
+  .dev-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .dev-card {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    padding: 7px 8px;
+  }
+  .dev-chain {
+    font-weight: 700;
+    font-size: 10px;
+    color: #0d2137;
+    margin-bottom: 5px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    align-items: center;
+  }
+  .dev-id {
+    font-weight: 500;
+    font-size: 8.5px;
+    color: #64748b;
+    background: #e2e8f0;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .dev-particle {
+    font-weight: 500;
+    font-size: 8.5px;
+    color: #4c1d95;
+    background: #ede9fe;
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+  .dev-particle code { font-family: monospace; font-size: 8px; }
+  .dev-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 5px;
+  }
+  .dev-table th {
+    font-size: 8px;
+    color: #94a3b8;
+    font-weight: 600;
+    text-align: left;
+    padding: 2px 3px;
+    text-transform: uppercase;
+  }
+  .dev-table td {
+    font-size: 8.5px;
+    padding: 2px 3px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #1e293b;
+  }
+  .dev-table td:first-child { font-weight: 600; white-space: nowrap; }
+  .addr {
+    font-family: monospace;
+    font-size: 7.5px;
+    color: #334155;
+    word-break: break-all;
+  }
+  .dev-lifi {
+    font-size: 8.5px;
+    margin-top: 4px;
+    color: #475569;
+  }
+  .lifi-ok { color: #047857; font-weight: 700; }
+  .dev-note {
+    background: #f1f5f9;
+    border: 1px solid #cbd5e1;
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-size: 8.5px;
+    color: #334155;
+    line-height: 1.7;
+    margin-bottom: 10px;
+  }
+  .dev-note strong { color: #0d2137; }
+  .dev-note code {
+    font-family: monospace;
+    font-size: 8px;
+    background: #e2e8f0;
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: #4c1d95;
+  }
+
+  @media print {
+    body { padding: 12px 18px; }
+    @page { size: A4; margin: 0; }
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div>
+    <h1>Coco Wallet — Chain & Token Integration Brief</h1>
+    <p>Target tokens per chain · On/Off-Ramp provider coverage · Li.Fi swap compatibility</p>
+  </div>
+  <div class="meta">March 2026 · Internal</div>
+</header>
+
+<!-- MAIN TABLE -->
+<div class="table-legend">
+  <span class="leg-title">Chains &amp; Tokens — Target State</span>
+  <span class="leg-sep">|</span>
+  <div class="leg-item">
+    <div class="swatch swatch-green"></div>
+    <span class="leg-text">Green row = currently live</span>
+  </div>
+  <span class="leg-sep">|</span>
+  <div class="leg-item">
+    <div class="swatch swatch-purple"></div>
+    <span class="leg-text">Purple token = new to add</span>
+  </div>
+  <span class="leg-sep">|</span>
+  <div class="leg-item">
+    <div class="swatch swatch-red"></div>
+    <span class="leg-text">Red token = WETH (not native ETH)</span>
+  </div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:10%">Chain</th>
+      <th style="width:13%">Target Tokens</th>
+      <th style="width:9%">Li.Fi Swap</th>
+      <th style="width:12%">Ramp Network</th>
+      <th style="width:10%">Bridge.xyz</th>
+      <th style="width:9%">Stripe Crypto</th>
+      <th style="width:11%">El Dorado</th>
+      <th style="width:12%">CryptoBuyer</th>
+      <th style="width:14%">Crixto (VE only)</th>
+    </tr>
+  </thead>
+  <tbody>
+
+    <!-- Optimism — LIVE -->
+    <tr class="live">
+      <td>
+        <span class="chain-name">Optimism</span>
+        <span class="badge evm">EVM</span>
+        <span class="badge live-badge">Live</span>
+      </td>
+      <td>
+        <span class="token">USDT</span>
+        <span class="token new">USDC</span>
+        <span class="token new">ETH</span>
+      </td>
+      <td>
+        <span class="lifi-yes">Supported</span>
+        <span class="dir">ETH, USDC, USDT</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">ETH, USDC</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDC</span>
+      </td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+    </tr>
+
+    <!-- Polygon — LIVE -->
+    <tr class="live">
+      <td>
+        <span class="chain-name">Polygon</span>
+        <span class="badge evm">EVM</span>
+        <span class="badge live-badge">Live</span>
+      </td>
+      <td>
+        <span class="token">USDT</span>
+        <span class="token">USDC</span>
+        <span class="token weth">WETH</span>
+      </td>
+      <td>
+        <span class="lifi-yes">Supported</span>
+        <span class="dir">ETH, USDC, USDT</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">ETH, USDC, USDT</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDC, USDT</span>
+      </td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+    </tr>
+
+    <!-- Base — LIVE (USDC) -->
+    <tr class="live">
+      <td>
+        <span class="chain-name">Base</span>
+        <span class="badge evm">EVM</span>
+        <span class="badge live-badge">Live</span>
+      </td>
+      <td>
+        <span class="token">USDC</span>
+        <span class="token new">ETH</span>
+        <span class="token new">USDT</span>
+        <span class="token special">VESC</span>
+      </td>
+      <td>
+        <span class="lifi-yes">Supported</span>
+        <span class="dir">ETH, USDC, USDT</span>
+        <span class="dir" style="color:#b45309;">⚠ VESC not on Li.Fi</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">ETH, USDC</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDC</span>
+      </td>
+      <td>
+        <span class="partial">On-Ramp Only</span>
+        <span class="dir">ETH, USDC</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">ETH, USDC</span>
+      </td>
+      <td>
+        <span class="partial">On-Ramp Only</span>
+        <span class="dir">VESC (internal)</span>
+      </td>
+      <td class="no">Not supported</td>
+    </tr>
+
+    <!-- BNB Chain — NEW -->
+    <tr>
+      <td>
+        <span class="chain-name">BNB Chain</span>
+        <span class="badge evm">EVM</span>
+      </td>
+      <td>
+        <span class="token weth">WETH</span>
+        <span class="token new">USDC</span>
+        <span class="token new">USDT</span>
+      </td>
+      <td>
+        <span class="lifi-yes">Supported</span>
+        <span class="dir">ETH, USDC, USDT</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">ETH, USDT, BEP-20</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDT</span>
+      </td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDT (Binance Pay)</span>
+      </td>
+    </tr>
+
+    <!-- Ethereum — NEW -->
+    <tr>
+      <td>
+        <span class="chain-name">Ethereum</span>
+        <span class="badge evm">EVM</span>
+      </td>
+      <td>
+        <span class="token new">ETH</span>
+        <span class="token new">USDC</span>
+        <span class="token new">USDT</span>
+      </td>
+      <td>
+        <span class="lifi-yes">Supported</span>
+        <span class="dir">ETH, USDC, USDT</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">ETH, USDC, USDT, DAI</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDC, USDT, EURC</span>
+      </td>
+      <td>
+        <span class="partial">On-Ramp Only</span>
+        <span class="dir">ETH, USDC</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">ETH, USDC, USDT</span>
+      </td>
+      <td class="no">Not supported</td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDT, USDC, ETH</span>
+      </td>
+    </tr>
+
+    <!-- Arbitrum — NEW -->
+    <tr>
+      <td>
+        <span class="chain-name">Arbitrum</span>
+        <span class="badge evm">EVM</span>
+      </td>
+      <td>
+        <span class="token new">ETH</span>
+        <span class="token new">USDC</span>
+        <span class="token new">USDT</span>
+      </td>
+      <td>
+        <span class="lifi-yes">Supported</span>
+        <span class="dir">ETH, USDC, USDT</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">ETH, USDC</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDC, USDT</span>
+      </td>
+      <td class="no">Not supported</td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDC, USDT</span>
+      </td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+    </tr>
+
+    <!-- Solana — NEW -->
+    <tr>
+      <td>
+        <span class="chain-name">Solana</span>
+        <span class="badge nonevm">Non-EVM</span>
+      </td>
+      <td>
+        <span class="token new">SOL</span>
+        <span class="token new">USDC</span>
+        <span class="token new">USDT</span>
+        <!-- ETH removed: not available on Solana -->
+      </td>
+      <td>
+        <span class="lifi-no">Not Supported</span>
+        <span class="dir" style="color:#991b1b;">Li.Fi is EVM-only</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">SOL, USDC</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDC, USDT</span>
+      </td>
+      <td>
+        <span class="partial">On-Ramp Only</span>
+        <span class="dir">SOL, USDC</span>
+      </td>
+      <td>
+        <span class="yes">On + Off-Ramp</span>
+        <span class="dir">USDC, USDT, SOL</span>
+      </td>
+      <td class="no">Not supported</td>
+      <td class="no">Not supported</td>
+    </tr>
+
+  </tbody>
+</table>
+
+<!-- LI.FI WARNING -->
+<div class="lifi-box">
+  <strong>Li.Fi Swap — 2 Gaps to Know:</strong>
+  &nbsp;&nbsp;(1) <strong>Solana is not supported by Li.Fi</strong> — Li.Fi only routes across EVM chains. Solana users cannot swap to/from other chains via Li.Fi. You will need a separate swap solution for Solana (e.g. Jupiter, direct bridge).
+  &nbsp;&nbsp;(2) <strong>VESC (Base) is not listed on Li.Fi</strong> — VESC is a custom token. It will not appear in Li.Fi's token registry unless manually added or whitelisted. Users cannot swap VESC via Li.Fi until this is resolved.
+</div>
+
+<!-- GENERAL NOTES -->
+<div class="note">
+  <strong>Venezuela:</strong> Only <strong>Crixto</strong> is SUNACRIP-licensed. All others (incl. El Dorado) block VE residents. Integrate Crixto as a separate flow for VE users.
+  &nbsp;|&nbsp; <strong>Bridge.xyz</strong> is B2B API only — requires a separate Stripe agreement, not a drop-in widget.
+  &nbsp;|&nbsp; <strong>CryptoBuyer</strong> is internal agreement only — no public docs. On-ramp for VESC on Base only.
+  &nbsp;|&nbsp; <strong>Red WETH tokens</strong> (Polygon, BNB Chain) are wrapped ETH — not native. Use the WETH contract address from the dev reference below, not the native ETH zero address. ETH does not exist on Solana and has been removed.
+</div>
+
+<!-- PROVIDER LEGEND -->
+<div class="section-label">Provider Overview</div>
+<div class="legend-grid">
+  <div class="legend-card">
+    <div class="pname">Ramp Network</div>
+    <div class="pdetail">
+      On + Off-Ramp<br>
+      USDC, USDT, DAI, ETH<br>
+      30+ chains · Consumer widget<br>
+      Venezuela: <span class="ve-no">No</span>
+    </div>
+  </div>
+  <div class="legend-card">
+    <div class="pname">Bridge.xyz</div>
+    <div class="pdetail">
+      On + Off-Ramp<br>
+      USDC, USDT, EURC<br>
+      8 chains · B2B API only<br>
+      Venezuela: <span class="ve-no">OFAC blocked</span>
+    </div>
+  </div>
+  <div class="legend-card">
+    <div class="pname">Stripe Crypto</div>
+    <div class="pdetail">
+      On-Ramp only<br>
+      USDC, ETH<br>
+      6 chains · Consumer widget<br>
+      Venezuela: <span class="ve-no">No</span>
+    </div>
+  </div>
+  <div class="legend-card">
+    <div class="pname">El Dorado</div>
+    <div class="pdetail">
+      On + Off-Ramp<br>
+      USDC, USDT, ETH<br>
+      ETH, ARB, Base, Solana<br>
+      Venezuela: <span class="ve-no">No</span>
+    </div>
+  </div>
+  <div class="legend-card">
+    <div class="pname">CryptoBuyer</div>
+    <div class="pdetail">
+      On-Ramp only<br>
+      VESC<br>
+      Base · Internal agreement<br>
+      Venezuela: <span class="ve-yes">Yes</span>
+    </div>
+  </div>
+  <div class="legend-card">
+    <div class="pname">Crixto</div>
+    <div class="pdetail">
+      On + Off-Ramp<br>
+      USDT, USDC, ETH<br>
+      BNB, Ethereum, TRON<br>
+      Venezuela: <span class="ve-yes">Yes (VE only)</span>
+    </div>
+  </div>
+</div>
+
+<!-- DEV REFERENCE -->
+<div class="section-label">Developer Reference — Chain IDs &amp; Token Addresses</div>
+
+<div class="dev-grid">
+
+  <!-- Optimism -->
+  <div class="dev-card">
+    <div class="dev-chain">Optimism <span class="dev-id">Chain ID: 10</span> <span class="dev-particle">Particle: <code>Optimism</code></span></div>
+    <table class="dev-table">
+      <tr><th>Token</th><th>Address</th><th>Dec</th></tr>
+      <tr><td>ETH</td><td class="addr">native (0x000…000)</td><td>18</td></tr>
+      <tr><td>USDC</td><td class="addr">0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85</td><td>6</td></tr>
+      <tr><td>USDT</td><td class="addr">0x94b008aA00579c1307B0EF2c499aD98a8ce58e58</td><td>6</td></tr>
+    </table>
+    <div class="dev-lifi">Li.Fi: <span class="lifi-ok">Supported</span></div>
+  </div>
+
+  <!-- Polygon -->
+  <div class="dev-card">
+    <div class="dev-chain">Polygon <span class="dev-id">Chain ID: 137</span> <span class="dev-particle">Particle: <code>Polygon</code></span></div>
+    <table class="dev-table">
+      <tr><th>Token</th><th>Address</th><th>Dec</th></tr>
+      <tr><td>ETH (WETH)</td><td class="addr">0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619</td><td>18</td></tr>
+      <tr><td>USDC</td><td class="addr">0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359</td><td>6</td></tr>
+      <tr><td>USDT</td><td class="addr">0xc2132D05D31c914a87C6611C10748AEb04B58e8F</td><td>6</td></tr>
+    </table>
+    <div class="dev-lifi">Li.Fi: <span class="lifi-ok">Supported</span> &nbsp;·&nbsp; <span style="color:#92400e;font-size:8px;">ETH = WETH on Polygon</span></div>
+  </div>
+
+  <!-- Base -->
+  <div class="dev-card">
+    <div class="dev-chain">Base <span class="dev-id">Chain ID: 8453</span> <span class="dev-particle">Particle: <code>Base</code></span></div>
+    <table class="dev-table">
+      <tr><th>Token</th><th>Address</th><th>Dec</th></tr>
+      <tr><td>ETH</td><td class="addr">native (0x000…000)</td><td>18</td></tr>
+      <tr><td>USDC</td><td class="addr">0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913</td><td>6</td></tr>
+      <tr><td>USDT</td><td class="addr">0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2</td><td>6</td></tr>
+      <tr><td>VESC (token)</td><td class="addr">0x09b744cb7b515a694c3dc257835caab89ef1c270</td><td>18</td></tr>
+      <tr><td>VESC (vault)</td><td class="addr">0x6adf72b9c56aab9225d242259bcd72857686190a</td><td>—</td></tr>
+    </table>
+    <div class="dev-lifi">Li.Fi: <span class="lifi-ok">Supported</span> &nbsp;·&nbsp; <span style="color:#991b1b;font-size:8px;">VESC not on Li.Fi</span></div>
+  </div>
+
+  <!-- BNB Chain -->
+  <div class="dev-card">
+    <div class="dev-chain">BNB Chain <span class="dev-id">Chain ID: 56</span> <span class="dev-particle">Particle: <code>BNBChain</code></span></div>
+    <table class="dev-table">
+      <tr><th>Token</th><th>Address</th><th>Dec</th></tr>
+      <tr><td>ETH (WETH)</td><td class="addr">0x2170Ed0880ac9A755fd29B2688956BD959F933F8</td><td>18</td></tr>
+      <tr><td>USDC</td><td class="addr">0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d</td><td>18</td></tr>
+      <tr><td>USDT</td><td class="addr">0x55d398326f99059fF775485246999027B3197955</td><td>18</td></tr>
+    </table>
+    <div class="dev-lifi">Li.Fi: <span class="lifi-ok">Supported</span> &nbsp;·&nbsp; <span style="color:#92400e;font-size:8px;">ETH = WETH · USDC/USDT are 18 dec on BSC</span></div>
+  </div>
+
+  <!-- Ethereum -->
+  <div class="dev-card">
+    <div class="dev-chain">Ethereum <span class="dev-id">Chain ID: 1</span> <span class="dev-particle">Particle: <code>Ethereum</code></span></div>
+    <table class="dev-table">
+      <tr><th>Token</th><th>Address</th><th>Dec</th></tr>
+      <tr><td>ETH</td><td class="addr">native (0x000…000)</td><td>18</td></tr>
+      <tr><td>USDC</td><td class="addr">0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48</td><td>6</td></tr>
+      <tr><td>USDT</td><td class="addr">0xdAC17F958D2ee523a2206206994597C13D831ec7</td><td>6</td></tr>
+    </table>
+    <div class="dev-lifi">Li.Fi: <span class="lifi-ok">Supported</span></div>
+  </div>
+
+  <!-- Arbitrum -->
+  <div class="dev-card">
+    <div class="dev-chain">Arbitrum <span class="dev-id">Chain ID: 42161</span> <span class="dev-particle">Particle: <code>ArbitrumOne</code></span></div>
+    <table class="dev-table">
+      <tr><th>Token</th><th>Address</th><th>Dec</th></tr>
+      <tr><td>ETH</td><td class="addr">native (0x000…000)</td><td>18</td></tr>
+      <tr><td>USDC</td><td class="addr">0xaf88d065e77c8cC2239327C5EDb3A432268e5831</td><td>6</td></tr>
+      <tr><td>USDT (USDT0)</td><td class="addr">0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9</td><td>6</td></tr>
+    </table>
+    <div class="dev-lifi">Li.Fi: <span class="lifi-ok">Supported</span> &nbsp;·&nbsp; <span style="color:#92400e;font-size:8px;">USDT listed as USDT0 on Li.Fi (Stargate bridged)</span></div>
+  </div>
+
+  <!-- Solana -->
+  <div class="dev-card" style="border-color:#fecaca;">
+    <div class="dev-chain">Solana <span class="dev-id">Chain ID: 101</span> <span class="dev-particle">Particle: <code>Solana</code></span></div>
+    <table class="dev-table">
+      <tr><th>Token</th><th>Address (Mint)</th><th>Dec</th></tr>
+      <tr><td>SOL</td><td class="addr">native</td><td>9</td></tr>
+      <tr><td>USDC</td><td class="addr">EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v</td><td>6</td></tr>
+      <tr><td>USDT</td><td class="addr">Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB</td><td>6</td></tr>
+    </table>
+    <div class="dev-lifi">Li.Fi: <span style="color:#dc2626;font-weight:700;font-size:9px;">Not Supported</span> &nbsp;·&nbsp; <span style="color:#991b1b;font-size:8px;">Use Jupiter or direct bridge for Solana swaps</span></div>
+  </div>
+
+</div>
+
+<div class="dev-note">
+  <strong>Particle AA import:</strong> <code>import &#123; Ethereum, Optimism, BNBChain, Polygon, ArbitrumOne, Base, Solana &#125; from '@particle-network/chains';</code>
+  &nbsp;&nbsp;<strong>Native ETH address convention:</strong> use <code>0x0000000000000000000000000000000000000000</code> for native ETH on Ethereum, Optimism, Arbitrum, Base. On Polygon and BNB Chain, ETH is WETH — use the addresses above.
+  &nbsp;&nbsp;<strong>USDC/USDT decimals:</strong> standard 6 on all chains except BNB Chain where both are 18 — handle this in your token formatting logic.
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <span>Coco Wallet · Internal · March 2026</span>
+  <span>Li.Fi chain support verified via li.quest/v1/chains API · El Dorado tokens verified from widget.eldorado.io source</span>
+</footer>
+
+</body>
+</html>
