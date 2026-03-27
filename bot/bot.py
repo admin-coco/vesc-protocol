@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 RPC_URL        = os.environ.get("RPC_URL", "https://mainnet.base.org")
-VAULT_ADDRESS  = "0x3b763707afA4b1f985Feace08a8698252893F366"
+VAULT_ADDRESS  = "0xecfc3fef09089aaaec1aa8517c76335f3f4223c4"
 
 VAULT_ABI = [
     {

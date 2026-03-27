@@ -28,7 +28,7 @@ const CONFIG = {
   FX_API_URL:        process.env.FX_API_URL,
   FX_API_KEY:        process.env.FX_API_KEY,
   FX_SECRET_KEY:     process.env.FX_SECRET_KEY,
-  VAULT_ADDRESS:     "0x3b763707afA4b1f985Feace08a8698252893F366",
+  VAULT_ADDRESS:     "0xecfc3fef09089aaaec1aa8517c76335f3f4223c4",
   RPC_URL:           process.env.RPC_URL || "https://mainnet.base.org",
   KEYSTORE_JSON:     process.env.KEYSTORE_JSON,
   KEYSTORE_PASSWORD: process.env.KEYSTORE_PASSWORD,
