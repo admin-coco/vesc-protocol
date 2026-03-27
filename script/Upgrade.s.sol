@@ -6,7 +6,7 @@ import {VESCVault} from "../src/VESCVault.sol";
 
 contract UpgradeVESC is Script {
     // Address of the existing ERC1967Proxy
-    address constant PROXY = address(0); // TODO: set before running
+    address constant PROXY = 0x50f50cf026837ab49f337927d2b3269a7dedbc60;
 
     function run() external {
         require(PROXY != address(0), "Set PROXY address before upgrading");
