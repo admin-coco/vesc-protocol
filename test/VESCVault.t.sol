@@ -101,16 +101,18 @@ contract VESCVaultTest is Test {
 
         uint256 vescIn = token.balanceOf(alice); // 41000e18
 
+        // Burn pays out at buyRate (400), but vault only holds 100 USDC from mint.
+        // grossUsdc = 41000e18 * 1e6 / 400e18 = 102.5 USDC — seed the shortfall.
+        uint256 grossUsdc = vescIn * 1e6 / BUY_RATE;
+        uint256 shortfall = grossUsdc > usdcIn ? grossUsdc - usdcIn : 0;
+        if (shortfall > 0) _mintUSDC(address(vault), shortfall);
+
         vm.startPrank(alice);
         vault.burn(vescIn, 0);
         vm.stopPrank();
 
-        // grossUsdc = 41000e18 * 1e6 / 400e18 = 102_500_000 (102.5 USDC)
-        // fee = 102_500_000 * 25 / 10000 = 256_250
-        // net = 102_500_000 - 256_250 = 102_243_750
-        uint256 grossUsdc    = vescIn * 1e6 / BUY_RATE;
-        uint256 fee          = grossUsdc * 25 / 10_000;
-        uint256 expectedNet  = grossUsdc - fee;
+        uint256 fee         = grossUsdc * 25 / 10_000;
+        uint256 expectedNet = grossUsdc - fee;
         assertEq(usdc.balanceOf(alice), expectedNet);
         assertEq(token.balanceOf(alice), 0);
     }
@@ -122,12 +124,16 @@ contract VESCVaultTest is Test {
         _mintUSDC(alice, usdcIn);
         _approveAndMint(alice, usdcIn);
 
-        uint256 vescBal = token.balanceOf(alice);
+        uint256 vescBal   = token.balanceOf(alice);
+        uint256 grossUsdc = vescBal * 1e6 / BUY_RATE;
+        uint256 shortfall = grossUsdc > usdcIn ? grossUsdc - usdcIn : 0;
+        if (shortfall > 0) _mintUSDC(address(vault), shortfall);
+
         vm.prank(alice);
         vault.burn(vescBal, 0);
 
-        // buyRate < sellRate so burning recovers more USDC than was deposited
-        // (before fee). Net after 0.25% fee should still exceed deposit.
+        // buyRate < sellRate: burning recovers more USDC (before fee) than deposited.
+        // Net after 0.25% fee should still exceed original deposit.
         assertGt(usdc.balanceOf(alice), usdcIn);
     }
 
@@ -140,7 +146,10 @@ contract VESCVaultTest is Test {
 
         uint256 vescBal   = token.balanceOf(alice);
         uint256 grossUsdc = vescBal * 1e6 / BUY_RATE;
-        uint256 fee       = grossUsdc * 25 / 10_000;
+        uint256 shortfall = grossUsdc > usdcIn ? grossUsdc - usdcIn : 0;
+        if (shortfall > 0) _mintUSDC(address(vault), shortfall);
+
+        uint256 fee = grossUsdc * 25 / 10_000;
 
         vm.prank(alice);
         vault.burn(vescBal, 0);
@@ -170,9 +179,10 @@ contract VESCVaultTest is Test {
     }
 
     function test_SetRates_SellTooLarge_Reverts() public {
+        // Drop both rates by 90% (exceeds 20% cap); keep buy < sell to isolate the cap check
         vm.warp(block.timestamp + vault.MIN_RATE_UPDATE_INTERVAL());
         vm.expectRevert(VESCVault.RateChangeTooLarge.selector);
-        vault.setRates(SELL_RATE / 10, BUY_RATE * 105 / 100);
+        vault.setRates(SELL_RATE / 10, BUY_RATE / 11);
     }
 
     function test_SetRates_BuyTooLarge_Reverts() public {
@@ -251,7 +261,11 @@ contract VESCVaultTest is Test {
         _mintUSDC(alice, usdcIn);
         _approveAndMint(alice, usdcIn);
 
-        uint256 vescBal = token.balanceOf(alice);
+        uint256 vescBal   = token.balanceOf(alice);
+        uint256 grossUsdc = vescBal * 1e6 / BUY_RATE;
+        uint256 shortfall = grossUsdc > usdcIn ? grossUsdc - usdcIn : 0;
+        if (shortfall > 0) _mintUSDC(address(vault), shortfall);
+
         vm.prank(alice);
         vault.burn(vescBal, 0);
 
@@ -290,11 +304,18 @@ contract VESCVaultTest is Test {
         uint256 usdcIn = 100e6;
         _mintUSDC(alice, usdcIn);
         _approveAndMint(alice, usdcIn);
+
+        // Seed vault so burn would succeed if not paused
+        uint256 vescBal   = token.balanceOf(alice);
+        uint256 grossUsdc = vescBal * 1e6 / BUY_RATE;
+        uint256 shortfall = grossUsdc > usdcIn ? grossUsdc - usdcIn : 0;
+        if (shortfall > 0) _mintUSDC(address(vault), shortfall);
+
         vault.pause();
 
         vm.prank(alice);
         vm.expectRevert();
-        vault.burn(token.balanceOf(alice), 0);
+        vault.burn(vescBal, 0);
     }
 
     // ── Zero-amount guards ───────────────────────────────────────────────────
@@ -344,11 +365,14 @@ contract VESCVaultTest is Test {
         _approveAndMint(alice, usdcAmount);
 
         uint256 vescAmount = token.balanceOf(alice);
+        uint256 grossUsdc  = vescAmount * 1e6 / BUY_RATE;
+        uint256 shortfall  = grossUsdc > usdcAmount ? grossUsdc - usdcAmount : 0;
+        if (shortfall > 0) _mintUSDC(address(vault), shortfall);
+
         vm.prank(alice);
         vault.burn(vescAmount, 0);
 
-        uint256 grossUsdc = vescAmount * 1e6 / BUY_RATE;
-        uint256 fee       = grossUsdc * 25 / 10_000;
+        uint256 fee = grossUsdc * 25 / 10_000;
         assertEq(usdc.balanceOf(alice), grossUsdc - fee);
         assertEq(token.balanceOf(alice), 0);
     }
