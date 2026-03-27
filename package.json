@@ -1,0 +1,14 @@
+{
+  "name": "vesc-oracle",
+  "version": "2.0.0",
+  "main": "oracle/rate-updater.js",
+  "scripts": {
+    "start": "node oracle/rate-updater.js --watch"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
