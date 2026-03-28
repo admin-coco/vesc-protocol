@@ -124,6 +124,7 @@ const VAULT_ABI = [
   "function buyRate() view returns (uint256)",
   "function sellRate() view returns (uint256)",
   "function setRates(uint256 newBuyRate, uint256 newSellRate) external",
+  "function recordSample(uint256 buy, uint256 sell) external",
 ];
 
 async function getProvider() {
@@ -204,6 +205,19 @@ async function updateRates() {
 
   const sellChange = changePct(apiSell, onChain.sell);
   const buyChange  = changePct(apiBuy,  onChain.buy);
+
+  // Always record a verifiable on-chain sample for chart history
+  try {
+    const provider  = await getProvider();
+    const wallet    = await getSigner();
+    const signer    = wallet.connect(provider);
+    const vault     = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, signer);
+    const tx = await vault.recordSample(BigInt(rateToWei(apiBuy)), BigInt(rateToWei(apiSell)));
+    await tx.wait();
+    log("INFO", "Rate sample recorded on-chain", { txHash: tx.hash, sell: apiSell, buy: apiBuy });
+  } catch (e) {
+    log("WARN", `recordSample failed (non-fatal): ${e.message}`);
+  }
 
   if (sellChange < CONFIG.MIN_CHANGE_PCT && buyChange < CONFIG.MIN_CHANGE_PCT) {
     log("INFO", `No significant change (sell ${sellChange.toFixed(4)}%, buy ${buyChange.toFixed(4)}%) — skipping`);
