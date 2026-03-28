@@ -68,6 +68,7 @@ contract VESCVault is
     error SellRateExceedsBuyRate();
 
     event RatesUpdated(uint256 oldBuyRate, uint256 newBuyRate, uint256 oldSellRate, uint256 newSellRate);
+    event RateSampled(uint256 buyRate, uint256 sellRate, uint256 timestamp);
     event RateUpdaterSet(address indexed oldUpdater, address indexed newUpdater);
     event Minted(address indexed user, uint256 usdcIn, uint256 vescOut);
     event Burned(address indexed user, uint256 vescIn, uint256 usdcOut, uint256 fee);
@@ -153,6 +154,12 @@ contract VESCVault is
 
         emit RatesUpdated(oldBuy, newBuyRate, oldSell, newSellRate);
         _checkInvariant();
+    }
+
+    /// @notice Emit a verifiable on-chain rate sample without changing state.
+    /// @dev Called by the oracle every fetch cycle for chart data.
+    function recordSample(uint256 buy, uint256 sell) external onlyRateUpdater {
+        emit RateSampled(buy, sell, block.timestamp);
     }
 
     function setRescueToken(address token, bool approved) external onlyOwner {
