@@ -188,8 +188,8 @@ async function updateRates() {
     }
   }
 
-  if (apiBuy > apiSell) {
-    log("ERROR", "buy rate exceeds sell rate — aborting", { apiBuy, apiSell });
+  if (apiSell > apiBuy) {
+    log("ERROR", "sell rate exceeds buy rate — aborting", { apiBuy, apiSell });
     return { success: false, reason: "invalid_spread" };
   }
 
