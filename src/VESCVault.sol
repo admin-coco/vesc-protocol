@@ -210,6 +210,7 @@ contract VESCVault is
     /// @param usdcAmount  Amount of USDC to deposit (6 decimals)
     /// @param minVescOut  Minimum VESC to receive
     function mint(uint256 usdcAmount, uint256 minVescOut) external nonReentrant whenNotPaused {
+        if (emergencyMode) revert NotEmergencyMode();
         if (usdcAmount == 0) revert UsdcAmountZero();
         if (block.timestamp - lastRateUpdate > MAX_RATE_STALENESS) revert RateStale();
 
@@ -228,6 +229,7 @@ contract VESCVault is
     /// @param vescAmount  Amount of VESC to burn (18 decimals)
     /// @param minUsdcOut  Minimum USDC to receive
     function burn(uint256 vescAmount, uint256 minUsdcOut) external nonReentrant whenNotPaused {
+        if (emergencyMode) revert NotEmergencyMode();
         if (vescAmount == 0) revert VescAmountZero();
         if (block.timestamp - lastRateUpdate > MAX_RATE_STALENESS) revert RateStale();
 

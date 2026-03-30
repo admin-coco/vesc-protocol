@@ -315,6 +315,33 @@ contract VESCVaultTest is Test {
         vault.burn(vescBal, 0);
     }
 
+    // ── Emergency mode blocks mint and burn ──────────────────────────────────
+
+    function test_EmergencyMode_Mint_Reverts() public {
+        vault.setEmergencyMode(true);
+        _mintUSDC(alice, 100e6);
+
+        vm.startPrank(alice);
+        usdc.approve(address(vault), 100e6);
+        vm.expectRevert(VESCVault.NotEmergencyMode.selector);
+        vault.mint(100e6, 0);
+        vm.stopPrank();
+    }
+
+    function test_EmergencyMode_Burn_Reverts() public {
+        uint256 usdcIn = 100e6;
+        _mintUSDC(alice, usdcIn);
+        _approveAndMint(alice, usdcIn);
+
+        uint256 vescBal = token.balanceOf(alice);
+        _seedShortfall(vescBal, usdcIn);
+        vault.setEmergencyMode(true);
+
+        vm.prank(alice);
+        vm.expectRevert(VESCVault.NotEmergencyMode.selector);
+        vault.burn(vescBal, 0);
+    }
+
     // ── Zero-amount guards ───────────────────────────────────────────────────
 
     function test_MintZero_Reverts() public {
