@@ -425,7 +425,15 @@ def _pool_advice(buy: Decimal, sell: Decimal, ps: dict) -> str:
             f"  8. Run `/pool` again to confirm new position is in range"
         )
 
+    if not in_range:
+        headline = "🔴 OUT OF RANGE — fees paused, rebalance needed"
+    elif pct_to_low < 5 or pct_to_high < 5:
+        headline = "⚠️ NEAR EDGE — approaching out-of-range"
+    else:
+        headline = "✅ IN RANGE — earning fees"
+
     return (
+        f"{headline}\n\n"
         f"🏊 *VESC/USDC Pool — Live Status*\n\n"
 
         f"*Position* `#{POOL_TOKEN_ID}` ({POOL_FEE} fee)\n"
