@@ -10,5 +10,21 @@ out/
 # Docs
 docs/
 
-# Dotenv file
+# Dotenv files (never commit credentials)
 .env
+**/.env
+*.env.local
+
+# Oracle
+oracle/node_modules/
+oracle/package-lock.json
+oracle/oracle.log
+oracle/*.log
+
+# Bot
+bot/__pycache__/
+bot/*.pyc
+
+# Node
+node_modules/
+package-lock.json

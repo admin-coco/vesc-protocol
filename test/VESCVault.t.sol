@@ -51,8 +51,10 @@ contract MockUSDC {
 contract VESCVaultTest is Test {
     // Real-world rates from Coco FX API (VES per USD):
     // buyRate > sellRate — the spread between them is the protocol margin.
-    uint256 constant BUY_RATE  = 704 * 1e18;  // mint: user gets 704 VESC per USDC
-    uint256 constant SELL_RATE = 612 * 1e18;  // burn: user gets USDC back at 612 VES/USD
+    // mint() uses sellRate: user gets fewer VESC per dollar (worse rate).
+    // burn() uses buyRate:  user needs more VESC per dollar (worse rate).
+    uint256 constant BUY_RATE  = 704 * 1e18;  // burn: user needs 704 VESC per USDC out
+    uint256 constant SELL_RATE = 612 * 1e18;  // mint: user gets 612 VESC per USDC in
 
     MockUSDC  usdc;
     VESCToken token;
@@ -85,26 +87,26 @@ contract VESCVaultTest is Test {
         vm.stopPrank();
     }
 
-    // Vault holds usdcIn from mint but burn at sellRate may need more — seed the shortfall
+    // Vault holds usdcIn from mint but burn at buyRate pays out less — no shortfall needed
     function _seedShortfall(uint256 vescAmount, uint256 usdcAlreadyInVault) internal {
-        uint256 grossUsdc = vescAmount * 1e6 / SELL_RATE;
+        uint256 grossUsdc = vescAmount * 1e6 / BUY_RATE;
         uint256 shortfall = grossUsdc > usdcAlreadyInVault ? grossUsdc - usdcAlreadyInVault : 0;
         if (shortfall > 0) _mintUSDC(address(vault), shortfall);
     }
 
-    // ── Basic mint (uses buyRate) ────────────────────────────────────────────
+    // ── Basic mint (uses sellRate) ───────────────────────────────────────────
 
     function test_Mint() public {
         uint256 usdcIn = 100e6;
         _mintUSDC(alice, usdcIn);
         _approveAndMint(alice, usdcIn);
 
-        // 100 USDC * 704e18 / 1e6 = 70400e18 VESC
-        assertEq(token.balanceOf(alice), 70_400e18);
+        // 100 USDC * 612e18 / 1e6 = 61200e18 VESC
+        assertEq(token.balanceOf(alice), 61_200e18);
         assertEq(usdc.balanceOf(address(vault)), usdcIn);
     }
 
-    // ── Basic burn (uses sellRate) ───────────────────────────────────────────
+    // ── Basic burn (uses buyRate) ────────────────────────────────────────────
 
     function test_Burn() public {
         uint256 usdcIn = 100e6;
@@ -117,13 +119,13 @@ contract VESCVaultTest is Test {
         vm.prank(alice);
         vault.burn(vescIn, 0);
 
-        uint256 grossUsdc  = vescIn * 1e6 / SELL_RATE;
+        uint256 grossUsdc  = vescIn * 1e6 / BUY_RATE;
         uint256 fee        = grossUsdc * 25 / 10_000;
         assertEq(usdc.balanceOf(alice), grossUsdc - fee);
         assertEq(token.balanceOf(alice), 0);
     }
 
-    // ── Spread: burn always yields more USDC than mint cost ─────────────────
+    // ── Spread: burn always yields LESS USDC than mint cost (no arbitrage) ───
 
     function test_Spread_BurnYieldsMoreThanMintCost() public {
         uint256 usdcIn = 100e6;
@@ -136,8 +138,8 @@ contract VESCVaultTest is Test {
         vm.prank(alice);
         vault.burn(vescBal, 0);
 
-        // buyRate(704) > sellRate(612): burning recovers more USDC (before fee)
-        assertGt(usdc.balanceOf(alice), usdcIn);
+        // sellRate(612) < buyRate(704): burning yields less USDC than was deposited
+        assertLt(usdc.balanceOf(alice), usdcIn);
     }
 
     // ── Fee calculation ──────────────────────────────────────────────────────
@@ -148,7 +150,7 @@ contract VESCVaultTest is Test {
         _approveAndMint(alice, usdcIn);
 
         uint256 vescBal   = token.balanceOf(alice);
-        uint256 grossUsdc = vescBal * 1e6 / SELL_RATE;
+        uint256 grossUsdc = vescBal * 1e6 / BUY_RATE;
         _seedShortfall(vescBal, usdcIn);
 
         uint256 fee = grossUsdc * 25 / 10_000;
@@ -219,7 +221,7 @@ contract VESCVaultTest is Test {
         _mintUSDC(alice, usdcIn);
         _approveAndMint(alice, usdcIn);
 
-        // Drop sellRate 19%: requiredReserves = totalSupply * 1e6 / newSellRate rises
+        // Drop buyRate 19%: requiredReserves = totalSupply * 1e6 / newBuyRate rises
         uint256 newSell = SELL_RATE * 81 / 100;
         uint256 newBuy  = BUY_RATE  * 81 / 100;
         vm.warp(block.timestamp + vault.MIN_RATE_UPDATE_INTERVAL());
@@ -232,7 +234,7 @@ contract VESCVaultTest is Test {
     function test_Mint_Slippage_Reverts() public {
         uint256 usdcIn = 100e6;
         _mintUSDC(alice, usdcIn);
-        uint256 expectedVesc = usdcIn * BUY_RATE / 1e6;
+        uint256 expectedVesc = usdcIn * SELL_RATE / 1e6;
 
         vm.startPrank(alice);
         usdc.approve(address(vault), usdcIn);
@@ -247,7 +249,7 @@ contract VESCVaultTest is Test {
         _approveAndMint(alice, usdcIn);
 
         uint256 vescBal   = token.balanceOf(alice);
-        uint256 grossUsdc = vescBal * 1e6 / SELL_RATE;
+        uint256 grossUsdc = vescBal * 1e6 / BUY_RATE;
         uint256 netUsdc   = grossUsdc - grossUsdc * 25 / 10_000;
         _seedShortfall(vescBal, usdcIn);
 
@@ -356,7 +358,7 @@ contract VESCVaultTest is Test {
         _mintUSDC(alice, usdcAmount);
         _approveAndMint(alice, usdcAmount);
 
-        assertEq(token.balanceOf(alice), usdcAmount * BUY_RATE / 1e6);
+        assertEq(token.balanceOf(alice), usdcAmount * SELL_RATE / 1e6);
         assertEq(usdc.balanceOf(address(vault)), usdcAmount);
     }
 
@@ -373,7 +375,7 @@ contract VESCVaultTest is Test {
         vm.prank(alice);
         vault.burn(vescAmount, 0);
 
-        uint256 grossUsdc = vescAmount * 1e6 / SELL_RATE;
+        uint256 grossUsdc = vescAmount * 1e6 / BUY_RATE;
         uint256 fee       = grossUsdc * 25 / 10_000;
         assertEq(usdc.balanceOf(alice), grossUsdc - fee);
         assertEq(token.balanceOf(alice), 0);

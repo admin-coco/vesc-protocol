@@ -123,6 +123,7 @@ async function fetchFxRates() {
 const VAULT_ABI = [
   "function buyRate() view returns (uint256)",
   "function sellRate() view returns (uint256)",
+  "function lastRateUpdate() view returns (uint256)",
   "function setRates(uint256 newBuyRate, uint256 newSellRate) external",
   "function recordSample(uint256 buy, uint256 sell) external",
 ];
@@ -140,10 +141,11 @@ async function getSigner() {
 async function getOnChainRates() {
   const provider = await getProvider();
   const vault = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, provider);
-  const [sellWei, buyWei] = await Promise.all([vault.sellRate(), vault.buyRate()]);
+  const [sellWei, buyWei, lastUpdate] = await Promise.all([vault.sellRate(), vault.buyRate(), vault.lastRateUpdate()]);
   return {
     sell: Number(sellWei) / 1e18,
     buy:  Number(buyWei)  / 1e18,
+    lastRateUpdate: Number(lastUpdate),
   };
 }
 
@@ -152,15 +154,6 @@ function rateToWei(rate) {
   return (BigInt(rateInt) * BigInt(1e12)).toString();
 }
 
-async function setOnChainRates(newSellWei, newBuyWei) {
-  const provider = await getProvider();
-  const wallet   = await getSigner();
-  const signer   = wallet.connect(provider);
-  const vault    = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, signer);
-  const tx = await vault.setRates(BigInt(newSellWei), BigInt(newBuyWei));
-  await tx.wait();
-  return tx.hash;
-}
 
 function changePct(newRate, oldRate) {
   return Math.abs((newRate - oldRate) / oldRate) * 100;
@@ -206,22 +199,38 @@ async function updateRates() {
   const sellChange = changePct(apiSell, onChain.sell);
   const buyChange  = changePct(apiBuy,  onChain.buy);
 
-  // Always record a verifiable on-chain sample for chart history
+  // Build a single shared signer for this cycle so nonces are sequential
+  let sharedSigner = null;
+  let sharedVault  = null;
   try {
-    const provider  = await getProvider();
-    const wallet    = await getSigner();
-    const signer    = wallet.connect(provider);
-    const vault     = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, signer);
-    const tx = await vault.recordSample(BigInt(rateToWei(apiBuy)), BigInt(rateToWei(apiSell)));
-    await tx.wait();
-    log("INFO", "Rate sample recorded on-chain", { txHash: tx.hash, sell: apiSell, buy: apiBuy });
+    const provider = await getProvider();
+    const wallet   = await getSigner();
+    sharedSigner   = wallet.connect(provider);
+    sharedVault    = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, sharedSigner);
   } catch (e) {
-    log("WARN", `recordSample failed (non-fatal): ${e.message}`);
+    log("WARN", `Could not build signer (non-fatal for sample): ${e.message}`);
   }
 
+  // Always record a verifiable on-chain sample for chart history
+  if (sharedVault) {
+    try {
+      const tx = await sharedVault.recordSample(BigInt(rateToWei(apiBuy)), BigInt(rateToWei(apiSell)));
+      await tx.wait();
+      log("INFO", "Rate sample recorded on-chain", { txHash: tx.hash, sell: apiSell, buy: apiBuy });
+    } catch (e) {
+      log("WARN", `recordSample failed (non-fatal): ${e.message}`);
+    }
+  }
+
+  const stalenessSec = Math.floor(Date.now() / 1000) - Number(onChain.lastRateUpdate || 0);
+  const forceUpdate  = stalenessSec > (CONFIG.MAX_STALENESS_SEC || 1500); // force if >25 min stale
+
   if (sellChange < CONFIG.MIN_CHANGE_PCT && buyChange < CONFIG.MIN_CHANGE_PCT) {
-    log("INFO", `No significant change (sell ${sellChange.toFixed(4)}%, buy ${buyChange.toFixed(4)}%) — skipping`);
-    return { success: true, reason: "no_change" };
+    if (!forceUpdate) {
+      log("INFO", `No significant change (sell ${sellChange.toFixed(4)}%, buy ${buyChange.toFixed(4)}%) — skipping`);
+      return { success: true, reason: "no_change" };
+    }
+    log("WARN", `Rates unchanged but on-chain data is ${Math.round(stalenessSec / 60)}m stale — forcing update to prevent RateStale revert`);
   }
 
   for (const [label, change] of [["sell", sellChange], ["buy", buyChange]]) {
@@ -234,8 +243,13 @@ async function updateRates() {
     }
   }
 
-  const newSellWei = rateToWei(apiSell);
+  if (!sharedVault) {
+    log("ERROR", "No signer available — cannot send setRates()");
+    return { success: false, reason: "no_signer" };
+  }
+
   const newBuyWei  = rateToWei(apiBuy);
+  const newSellWei = rateToWei(apiSell);
 
   log("INFO", "Sending setRates() transaction", {
     sell: { from: onChain.sell, to: apiSell, change: `${sellChange.toFixed(4)}%` },
@@ -243,9 +257,10 @@ async function updateRates() {
   });
 
   try {
-    const txHash = await setOnChainRates(newSellWei, newBuyWei);
-    log("OK", "Rates updated on-chain", { txHash, sell: apiSell, buy: apiBuy });
-    return { success: true, reason: "updated", apiSell, apiBuy, txHash };
+    const tx = await sharedVault.setRates(BigInt(newBuyWei), BigInt(newSellWei));
+    await tx.wait();
+    log("OK", "Rates updated on-chain", { txHash: tx.hash, sell: apiSell, buy: apiBuy });
+    return { success: true, reason: "updated", apiSell, apiBuy, txHash: tx.hash };
   } catch (e) {
     log("ERROR", `setRates transaction failed: ${e.message}`);
     return { success: false, reason: "tx_error", error: e.message };

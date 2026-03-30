@@ -7,11 +7,14 @@ Commands:
   /alert   - set a % change alert threshold
   /quote   - mint/burn quote for an amount
   /schedule - configure auto-posts to a channel
+  /pool    - live Uniswap v3 pool status + rebalance guidance
+  /fees    - uncollected LP fees earned on the Uniswap v3 position
   /stop    - stop your active alert
 """
 
 import os
 import logging
+import math
 from decimal import Decimal
 from datetime import datetime
 
@@ -29,11 +32,20 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ─── Config ────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 RPC_URL        = os.environ.get("RPC_URL", "https://mainnet.base.org")
 VAULT_ADDRESS  = "0x50f50cf026837ab49f337927d2b3269a7dedbc60"  # ERC1967Proxy
+
+# Uniswap v3 pool position (VESC/USDC, 0.05% fee)
+POOL_ADDRESS   = "0x4d717b7cd7d51e5848D1968A57014D868Bc0E7E5"
+NPM_ADDRESS    = "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1"  # NonfungiblePositionManager
+POOL_TOKEN_ID  = 4876709
+POOL_FEE       = "0.05%"
+POOL_TICK_LOW  = 339540
+POOL_TICK_HIGH = 342960
+POOL_URL       = "https://app.uniswap.org/explore/pools/base/0x4d717b7cd7d51e5848D1968A57014D868Bc0E7E5"
 
 VAULT_ABI = [
     {
@@ -52,10 +64,53 @@ VAULT_ABI = [
     },
 ]
 
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
-vault = w3.eth.contract(address=Web3.to_checksum_address(VAULT_ADDRESS), abi=VAULT_ABI)
+POOL_ABI = [
+    {
+        "inputs": [],
+        "name": "slot0",
+        "outputs": [
+            {"internalType": "uint160", "name": "sqrtPriceX96", "type": "uint160"},
+            {"internalType": "int24",   "name": "tick",          "type": "int24"},
+            {"internalType": "uint16",  "name": "observationIndex",             "type": "uint16"},
+            {"internalType": "uint16",  "name": "observationCardinality",       "type": "uint16"},
+            {"internalType": "uint16",  "name": "observationCardinalityNext",   "type": "uint16"},
+            {"internalType": "uint8",   "name": "feeProtocol",   "type": "uint8"},
+            {"internalType": "bool",    "name": "unlocked",      "type": "bool"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
 
-# ─── Helpers ───────────────────────────────────────────────────────────────
+NPM_ABI = [
+    {
+        "inputs": [{"internalType": "uint256", "name": "tokenId", "type": "uint256"}],
+        "name": "positions",
+        "outputs": [
+            {"internalType": "uint96",  "name": "nonce",                "type": "uint96"},
+            {"internalType": "address", "name": "operator",             "type": "address"},
+            {"internalType": "address", "name": "token0",               "type": "address"},
+            {"internalType": "address", "name": "token1",               "type": "address"},
+            {"internalType": "uint24",  "name": "fee",                  "type": "uint24"},
+            {"internalType": "int24",   "name": "tickLower",            "type": "int24"},
+            {"internalType": "int24",   "name": "tickUpper",            "type": "int24"},
+            {"internalType": "uint128", "name": "liquidity",            "type": "uint128"},
+            {"internalType": "uint256", "name": "feeGrowthInside0LastX128", "type": "uint256"},
+            {"internalType": "uint256", "name": "feeGrowthInside1LastX128", "type": "uint256"},
+            {"internalType": "uint128", "name": "tokensOwed0",          "type": "uint128"},
+            {"internalType": "uint128", "name": "tokensOwed1",          "type": "uint128"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+w3    = Web3(Web3.HTTPProvider(RPC_URL))
+vault = w3.eth.contract(address=Web3.to_checksum_address(VAULT_ADDRESS), abi=VAULT_ABI)
+pool  = w3.eth.contract(address=Web3.to_checksum_address(POOL_ADDRESS),  abi=POOL_ABI)
+npm   = w3.eth.contract(address=Web3.to_checksum_address(NPM_ADDRESS),   abi=NPM_ABI)
+
+# ── Helpers ────────────────────────────────────────────────────────────────
 
 def get_buy_sell_rates() -> tuple[Decimal, Decimal]:
     """Return (buy_rate, sell_rate) read directly from VESCVault on Base.
@@ -79,7 +134,58 @@ def format_rates(buy: Decimal, sell: Decimal) -> str:
     )
 
 
-# ─── /price ────────────────────────────────────────────────────────────────
+def tick_to_price(tick: int) -> float:
+    """Convert a Uniswap v3 tick to a raw token1/token0 price ratio."""
+    return 1.0001 ** tick
+
+
+def get_pool_state() -> dict:
+    """Read live slot0 and LP position from chain."""
+    slot0 = pool.functions.slot0().call()
+    pos   = npm.functions.positions(POOL_TOKEN_ID).call()
+
+    current_tick = slot0[1]
+    tick_lower   = pos[5]
+    tick_upper   = pos[6]
+    liquidity    = pos[7]
+
+    # token0=USDC(6dec), token1=VESC(18dec)
+    # raw price = token1/token0 = VESC/USDC units
+    # adjust for decimals: actual VESC per USDC = raw * 10^(6-18) = raw * 1e-12
+    # so USDC per VESC = 1 / (raw * 1e-12) ... but we just use ticks directly.
+    # price in USDC per VESC = 1.0001^tick * 1e-12
+    raw_current = tick_to_price(current_tick)
+    raw_lower   = tick_to_price(tick_lower)
+    raw_upper   = tick_to_price(tick_upper)
+
+    dec_adj = 1e-12  # 10^(decimals0 - decimals1) = 10^(6-18)
+    price_current_usdc_per_vesc = raw_current * dec_adj
+    price_lower_usdc_per_vesc   = raw_lower   * dec_adj
+    price_upper_usdc_per_vesc   = raw_upper   * dec_adj
+
+    in_range = tick_lower <= current_tick <= tick_upper
+
+    ticks_to_lower = current_tick - tick_lower
+    ticks_to_upper = tick_upper   - current_tick
+    # approximate % distance: each tick is 0.01%
+    pct_to_lower = ticks_to_lower * 0.01
+    pct_to_upper = ticks_to_upper * 0.01
+
+    return {
+        "current_tick":              current_tick,
+        "tick_lower":                tick_lower,
+        "tick_upper":                tick_upper,
+        "liquidity":                 liquidity,
+        "in_range":                  in_range,
+        "price_current_usdc_per_vesc": price_current_usdc_per_vesc,
+        "price_lower_usdc_per_vesc":   price_lower_usdc_per_vesc,
+        "price_upper_usdc_per_vesc":   price_upper_usdc_per_vesc,
+        "pct_to_lower":              pct_to_lower,
+        "pct_to_upper":              pct_to_upper,
+    }
+
+
+# ── /price ────────────────────────────────────────────────────────────────
 
 async def cmd_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
@@ -94,7 +200,7 @@ async def cmd_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Could not fetch rate. RPC may be unavailable.")
 
 
-# ─── /quote ────────────────────────────────────────────────────────────────
+# ── /quote ────────────────────────────────────────────────────────────────
 
 async def cmd_quote(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     usage = "Usage:\n  `/quote mint 100` — how much VESC for 100 USDC\n  `/quote burn 500` — how much USDC for 500 VESC"
@@ -141,7 +247,7 @@ async def cmd_quote(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
 
-# ─── /alert ────────────────────────────────────────────────────────────────
+# ── /alert ────────────────────────────────────────────────────────────────
 
 async def cmd_alert(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     usage = "Usage: `/alert 2.5` — notify me when rate moves ±2.5%"
@@ -159,7 +265,6 @@ async def cmd_alert(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     job_name = f"alert_{chat_id}"
 
-    # Remove existing alert for this chat
     for job in ctx.job_queue.get_jobs_by_name(job_name):
         job.schedule_removal()
 
@@ -212,7 +317,7 @@ async def _alert_check(ctx: ContextTypes.DEFAULT_TYPE):
         data["baseline"] = current
 
 
-# ─── /schedule ─────────────────────────────────────────────────────────────
+# ── /schedule ─────────────────────────────────────────────────────────────
 
 async def cmd_schedule(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     usage = (
@@ -275,89 +380,71 @@ async def _scheduled_post(ctx: ContextTypes.DEFAULT_TYPE):
         log.error("scheduled post error: %s", e)
 
 
-# ─── /pool ─────────────────────────────────────────────────────────────────
+# ── /pool ─────────────────────────────────────────────────────────────────
 
-def _pool_advice(buy: Decimal, sell: Decimal) -> str:
-    """
-    Generate CL pool setup guidance from current buy/sell rates.
+def _pool_advice(buy: Decimal, sell: Decimal, ps: dict) -> str:
+    in_range     = ps["in_range"]
+    cur_tick     = ps["current_tick"]
+    tick_low     = ps["tick_lower"]
+    tick_high    = ps["tick_upper"]
+    liquidity    = ps["liquidity"]
+    pct_to_low   = ps["pct_to_lower"]
+    pct_to_high  = ps["pct_to_upper"]
+    cur_price    = ps["price_current_usdc_per_vesc"]
+    low_price    = ps["price_lower_usdc_per_vesc"]
+    high_price   = ps["price_upper_usdc_per_vesc"]
 
-    VESC is priced in USDC. In a VESC/USDC pool the "price" is USDC per VESC,
-    i.e. the inverse of the VES/USD rate.
+    # Protocol mid price (from vault rates)
+    price_at_buy  = float(Decimal(1) / buy)
+    price_at_sell = float(Decimal(1) / sell)
+    mid_price     = (price_at_buy + price_at_sell) / 2
 
-    sell rate (612 VES/USD) → user gets 1/612 USDC per VESC when burning  → lower bound
-    buy  rate (704 VES/USD) → user gets 1/704 USDC per VESC when minting  → upper bound
-    mid  rate               → midpoint of the two, used as pool center
-    """
-    price_at_sell = Decimal(1) / sell   # USDC per VESC at sell rate (higher — more USDC back)
-    price_at_buy  = Decimal(1) / buy    # USDC per VESC at buy  rate (lower  — less USDC back)
-    mid_price     = (price_at_sell + price_at_buy) / 2
-    spread_pct    = float((price_at_sell - price_at_buy) / mid_price * 100)
+    range_status = "🟢 IN RANGE" if in_range else "🔴 OUT OF RANGE"
 
-    # Add a 10% buffer outside the buy/sell band so the position isn't
-    # constantly at the edge during minor rate fluctuations.
-    buffer        = Decimal("0.10")
-    range_low     = price_at_buy  * (1 - buffer)
-    range_high    = price_at_sell * (1 + buffer)
-
-    # Fee tier: the buy/sell spread is ~13% here, so 1% fee is appropriate.
-    # If spread ever compresses below 2%, drop to 0.3%.
-    if spread_pct > 5:
-        fee_tier    = "1%"
-        fee_reason  = f"spread is {spread_pct:.1f}% — wide enough to absorb 1% fee"
-    elif spread_pct > 1:
-        fee_tier    = "0.3%"
-        fee_reason  = f"spread is {spread_pct:.1f}% — moderate, 0.3% is efficient"
-    else:
-        fee_tier    = "0.05%"
-        fee_reason  = f"spread is {spread_pct:.1f}% — tight, use lowest fee tier"
-
-    # Rebalance warning: if current mid is within 5% of either edge, flag it.
+    # Edge warnings
     edge_warn = ""
-    low_gap  = float((mid_price - range_low)  / mid_price * 100)
-    high_gap = float((range_high - mid_price) / mid_price * 100)
-    if low_gap < 5:
-        edge_warn = "\n\n⚠️ *Rate is near the lower edge — consider rebalancing.*"
-    elif high_gap < 5:
-        edge_warn = "\n\n⚠️ *Rate is near the upper edge — consider rebalancing.*"
+    if in_range:
+        if pct_to_low < 5:
+            edge_warn = "\n\n⚠️ *Position is within 5% of lower tick — approaching out-of-range!*"
+        elif pct_to_high < 5:
+            edge_warn = "\n\n⚠️ *Position is within 5% of upper tick — approaching out-of-range!*"
+
+    # Rebalance steps (shown when out of range or edge warning)
+    rebalance_steps = ""
+    if not in_range or edge_warn:
+        rebalance_steps = (
+            f"\n\n*Rebalance Steps*\n"
+            f"  1. Go to [Uniswap v3 Pool]({POOL_URL})\n"
+            f"  2. Connect wallet that owns NFT position `#{POOL_TOKEN_ID}`\n"
+            f"  3. Remove liquidity from position `#{POOL_TOKEN_ID}`\n"
+            f"  4. Create a new position centered on current vault mid:\n"
+            f"     `{mid_price:.8f} USDC/VESC`\n"
+            f"  5. Use fee tier: `{POOL_FEE}`\n"
+            f"  6. Set range to cover ±10% around mid price\n"
+            f"  7. Add liquidity with your VESC + USDC balances\n"
+            f"  8. Run `/pool` again to confirm new position is in range"
+        )
 
     return (
-        f"🏊 *VESC/USDC Concentrated Liquidity Pool*\n\n"
+        f"🏊 *VESC/USDC Pool — Live Status*\n\n"
 
-        f"*Current Rates*\n"
-        f"  Buy  (mint): `{buy:,.4f} VES/USD` → `{price_at_buy:.8f} USDC/VESC`\n"
-        f"  Sell (burn): `{sell:,.4f} VES/USD` → `{price_at_sell:.8f} USDC/VESC`\n"
-        f"  Mid:         `{mid_price:.8f} USDC/VESC`\n"
-        f"  Spread:      `{spread_pct:.2f}%`\n\n"
+        f"*Position* `#{POOL_TOKEN_ID}` ({POOL_FEE} fee)\n"
+        f"  Status:    {range_status}\n"
+        f"  Liquidity: `{liquidity:,}`\n\n"
 
-        f"*Suggested Price Range* (±10% buffer outside spread)\n"
-        f"  Lower: `{range_low:.8f} USDC/VESC`\n"
-        f"  Upper: `{range_high:.8f} USDC/VESC`\n\n"
+        f"*Ticks*\n"
+        f"  Current: `{cur_tick}` (`{cur_price:.8f}` USDC/VESC)\n"
+        f"  Lower:   `{tick_low}` (`{low_price:.8f}` USDC/VESC) — `{pct_to_low:.1f}%` away\n"
+        f"  Upper:   `{tick_high}` (`{high_price:.8f}` USDC/VESC) — `{pct_to_high:.1f}%` away\n\n"
 
-        f"*Fee Tier*\n"
-        f"  Recommended: `{fee_tier}` — {fee_reason}\n\n"
+        f"*Vault Rates*\n"
+        f"  Buy  (mint): `{buy:,.4f} VES/USD` → `{price_at_buy:.8f}` USDC/VESC\n"
+        f"  Sell (burn): `{sell:,.4f} VES/USD` → `{price_at_sell:.8f}` USDC/VESC\n"
+        f"  Mid:         `{mid_price:.8f}` USDC/VESC\n\n"
 
-        f"*Setup on Aerodrome (Base)*\n"
-        f"  1. Go to aerodrome.finance → Liquidity → New Position\n"
-        f"  2. Select tokens: `VESC` + `USDC`\n"
-        f"  3. Choose pool type: *Concentrated (CL)*\n"
-        f"  4. Fee tier: `{fee_tier}`\n"
-        f"  5. Set min price: `{range_low:.8f}` USDC per VESC\n"
-        f"  6. Set max price: `{range_high:.8f}` USDC per VESC\n"
-        f"  7. Deposit amounts and confirm\n\n"
-
-        f"*Setup on Uniswap v3 (Base)*\n"
-        f"  1. Go to app.uniswap.org → Pool → New Position → Base network\n"
-        f"  2. Select tokens: `VESC` + `USDC`\n"
-        f"  3. Fee tier: `{fee_tier}`\n"
-        f"  4. Set min price: `{range_low:.8f}` USDC per VESC\n"
-        f"  5. Set max price: `{range_high:.8f}` USDC per VESC\n"
-        f"  6. Deposit and confirm\n\n"
-
-        f"*When to Rebalance*\n"
-        f"  • When the live rate moves outside your range\n"
-        f"  • Use `/alert {spread_pct/2:.1f}` to get notified when rate moves ±{spread_pct/2:.1f}%\n"
-        f"  • Run `/pool` again after each oracle update for fresh numbers"
+        f"[View pool on Uniswap]({POOL_URL})"
         f"{edge_warn}"
+        f"{rebalance_steps}"
     )
 
 
@@ -365,14 +452,66 @@ async def cmd_pool(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
         buy, sell = get_buy_sell_rates()
     except Exception as e:
-        log.error("pool rpc error: %s", e)
+        log.error("pool vault rpc error: %s", e)
         await update.message.reply_text("❌ Could not fetch rates from vault.")
         return
 
-    await update.message.reply_text(_pool_advice(buy, sell), parse_mode="Markdown")
+    try:
+        ps = get_pool_state()
+    except Exception as e:
+        log.error("pool state rpc error: %s", e)
+        await update.message.reply_text("❌ Could not read pool state from chain.")
+        return
+
+    await update.message.reply_text(
+        _pool_advice(buy, sell, ps),
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
 
 
-# ─── /stop ─────────────────────────────────────────────────────────────────
+# ── /fees ─────────────────────────────────────────────────────────────────
+
+async def cmd_fees(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        pos = npm.functions.positions(POOL_TOKEN_ID).call()
+    except Exception as e:
+        log.error("fees rpc error: %s", e)
+        await update.message.reply_text("❌ Could not read position from chain.")
+        return
+
+    # token0=USDC (6 dec), token1=VESC (18 dec)
+    tokens_owed_usdc = pos[10]   # tokensOwed0
+    tokens_owed_vesc = pos[11]   # tokensOwed1
+    liquidity        = pos[7]
+
+    usdc_fees = tokens_owed_usdc / 1e6
+    vesc_fees = tokens_owed_vesc / 1e18
+
+    collect_note = ""
+    if usdc_fees > 0 or vesc_fees > 0:
+        collect_note = (
+            f"\n\n*To collect:*\n"
+            f"  1. Go to [Uniswap v3 Pool]({POOL_URL})\n"
+            f"  2. Open position `#{POOL_TOKEN_ID}`\n"
+            f"  3. Click *Collect fees*"
+        )
+    else:
+        collect_note = "\n\nNo fees accrued yet — fees accumulate while the position is in range."
+
+    await update.message.reply_text(
+        f"💰 *Uncollected LP Fees — Position #{POOL_TOKEN_ID}*\n\n"
+        f"  USDC: `{usdc_fees:,.6f}`\n"
+        f"  VESC: `{vesc_fees:,.4f}`\n\n"
+        f"  Liquidity: `{liquidity:,}`\n"
+        f"  Fee tier:  `{POOL_FEE}`"
+        f"{collect_note}",
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )
+
+
+# ── /stop ─────────────────────────────────────────────────────────────────
 
 async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -389,7 +528,7 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No active alerts or scheduled updates found.")
 
 
-# ─── /start & /help ────────────────────────────────────────────────────────
+# ── /start & /help ────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -399,7 +538,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "  /price — current buy & sell rates\n"
         "  /quote mint 100 — VESC you'd get for 100 USDC\n"
         "  /quote burn 500 — USDC you'd get for 500 VESC\n"
-        "  /pool — CL pool setup guide with suggested price range\n"
+        "  /pool — live Uniswap v3 pool status + rebalance guidance\n"
+        "  /fees — uncollected LP fees on position #4876709\n"
         "  /alert 2.5 — notify when rate moves ±2.5%\n"
         "  /schedule 60 — post rate every 60 min\n"
         "  /stop — cancel all alerts & schedules",
@@ -407,19 +547,20 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ─── Main ──────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help",  cmd_start))
-    app.add_handler(CommandHandler("price", cmd_price))
-    app.add_handler(CommandHandler("quote", cmd_quote))
-    app.add_handler(CommandHandler("alert", cmd_alert))
+    app.add_handler(CommandHandler("start",    cmd_start))
+    app.add_handler(CommandHandler("help",     cmd_start))
+    app.add_handler(CommandHandler("price",    cmd_price))
+    app.add_handler(CommandHandler("quote",    cmd_quote))
+    app.add_handler(CommandHandler("alert",    cmd_alert))
     app.add_handler(CommandHandler("schedule", cmd_schedule))
-    app.add_handler(CommandHandler("pool",  cmd_pool))
-    app.add_handler(CommandHandler("stop",  cmd_stop))
+    app.add_handler(CommandHandler("pool",     cmd_pool))
+    app.add_handler(CommandHandler("fees",     cmd_fees))
+    app.add_handler(CommandHandler("stop",     cmd_stop))
 
     log.info("Bot starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
