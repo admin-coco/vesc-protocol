@@ -426,32 +426,19 @@ def _pool_advice(buy: Decimal, sell: Decimal, ps: dict) -> str:
         )
 
     if not in_range:
-        headline = f"🔴 OUT OF RANGE — fees paused, rebalance needed"
+        headline = "🔴 OUT OF RANGE — rebalance needed"
     elif pct_to_low < 5 or pct_to_high < 5:
-        headline = f"⚠️ NEAR EDGE — approaching out-of-range"
+        headline = "⚠️ NEAR EDGE"
     else:
-        headline = f"✅ IN RANGE — earning fees"
+        headline = "✅ IN RANGE"
+
+    rebalance = f"\n↩️ [Rebalance on Uniswap]({POOL_URL})" if (not in_range or edge_warn) else ""
 
     return (
-        f"[🏊 VESC/USDC Pool]({POOL_URL}) — {headline}\n\n"
-
-        f"*Position* `#{POOL_TOKEN_ID}` ({POOL_FEE} fee)\n"
-        f"  Status:    {range_status}\n"
-        f"  Liquidity: `{liquidity:,}`\n\n"
-
-        f"*Ticks*\n"
-        f"  Current: `{cur_tick}` (`{cur_price:.8f}` USDC/VESC)\n"
-        f"  Lower:   `{tick_low}` (`{low_price:.8f}` USDC/VESC) — `{pct_to_low:.1f}%` away\n"
-        f"  Upper:   `{tick_high}` (`{high_price:.8f}` USDC/VESC) — `{pct_to_high:.1f}%` away\n\n"
-
-        f"*Vault Rates*\n"
-        f"  Buy  (mint): `{buy:,.4f} VES/USD` → `{price_at_buy:.8f}` USDC/VESC\n"
-        f"  Sell (burn): `{sell:,.4f} VES/USD` → `{price_at_sell:.8f}` USDC/VESC\n"
-        f"  Mid:         `{mid_price:.8f}` USDC/VESC\n\n"
-
-        f"[View pool on Uniswap]({POOL_URL})"
-        f"{edge_warn}"
-        f"{rebalance_steps}"
+        f"[🏊 VESC/USDC]({POOL_URL}) {headline}\n\n"
+        f"Tick `{cur_tick}` | ↓`{pct_to_low:.1f}%` lower · ↑`{pct_to_high:.1f}%` upper\n"
+        f"Buy `{buy:,.0f}` · Sell `{sell:,.0f}` VES/USD · Mid `{mid_price:.6f}`"
+        f"{rebalance}"
     )
 
 
