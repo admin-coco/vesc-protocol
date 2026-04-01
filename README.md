@@ -1,6 +1,6 @@
 # VESC Protocol
 
-**VESC** is a Venezuelan bolívar-indexed token on Base, backed 1:1 by USDC at the live VES/USD exchange rate. Users deposit USDC into the vault and receive VESC tokens representing their value in bolívares. They can redeem at any time for USDC minus a 0.25% fee.
+**VESC** is a Venezuelan bolívar-indexed token on Base. Users deposit USDC into the vault and receive VESC tokens priced at the live VES/USD exchange rate — 1 VESC always equals 1 Venezuelan bolívar. When they redeem, they get back the USDC equivalent of their bolívares at the current rate, minus a 0.25% fee. The USD value of VESC moves with the VES/USD rate, just like holding bolívares.
 
 > Built on Base · Powered by Coco FX rates · UUPS upgradeable · Audited dependencies (OpenZeppelin v5)
 
