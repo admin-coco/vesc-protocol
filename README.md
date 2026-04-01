@@ -339,7 +339,7 @@ The vault uses UUPS (ERC1967). Only the owner can authorize upgrades.
 
 ## Emergency System
 
-If USDC becomes inaccessible (e.g. Circle blacklists the vault), the owner can:
+If USDC becomes inaccessible for any reason, the owner can:
 
 1. Call `setRescueToken(USDT, true)` — approve alternative token
 2. Call `swapReserves(USDT, router, swapData, minOut)` — swap vault USDC → USDT via any DEX
