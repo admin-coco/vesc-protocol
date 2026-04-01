@@ -21,6 +21,7 @@
 - [Security Model](#security-model)
 - [Protocol Parameters](#protocol-parameters)
 - [Emergency System](#emergency-system)
+- [Progressive Decentralization](#progressive-decentralization)
 - [Contributing](#contributing)
 
 ---
@@ -347,6 +348,38 @@ If USDC becomes inaccessible for any reason, the owner can:
 4. Users call `emergencyRedeem(USDT, vescAmount)` — receive pro-rata USDT, VESC is burned
 
 Normal `mint()` and `burn()` are blocked during emergency mode.
+
+---
+
+## Progressive Decentralization
+
+VESC launches with a pragmatic centralized structure to move fast and iterate. Decentralization is a deliberate roadmap, not an afterthought — each phase is triggered by real adoption milestones, not arbitrary timelines.
+
+### Ownership Evolution
+
+**Phase 1 — Single Owner (current)**
+The vault owner is a single EOA (hardware wallet). This allows rapid response to bugs, oracle issues, and market events during the protocol's early life. All privileged actions — upgrades, fee collection, emergency mode, rate updater rotation — are controlled by this key.
+
+**Phase 2 — Multi-sig (upon significant TVL)**
+Once TVL reaches a meaningful threshold, ownership will be transferred to a multi-sig (e.g. Gnosis Safe with M-of-N signers). This eliminates single-point-of-failure risk and distributes trust across multiple keyholders. The `transferOwnership()` function inherited from OpenZeppelin's `OwnableUpgradeable` makes this a single transaction.
+
+Target trigger: **$500K TVL** or community governance vote, whichever comes first.
+
+**Phase 3 — Governance (long-term)**
+At sufficient scale, ownership transitions to an on-chain governance contract — token holders vote on upgrades, fee parameters, and oracle configuration. The UUPS upgrade mechanism supports this without any fund migration.
+
+### Oracle Evolution
+
+The oracle is the most trust-sensitive component of the protocol. Its evolution follows a clear path from centralized to decentralized price feeds.
+
+**Phase 1 — Single FX Provider (current)**
+Rates are sourced exclusively from the Coco FX API and pushed on-chain by a single hot wallet every 15 minutes. Simple, fast, and sufficient for early adoption. Risk: single provider outage or compromise halts rate updates.
+
+**Phase 2 — Aggregated FX Providers**
+Three or more independent FX data providers (e.g. Coco, Yadio, ExchangeRate.host) are queried each cycle. The oracle computes a median or weighted average and rejects any update where providers diverge beyond a threshold. A single compromised or offline provider cannot move the on-chain rate. The `setRateUpdater()` mechanism supports swapping in an upgraded oracle without any contract changes.
+
+**Phase 3 — Chainlink Oracle**
+When Chainlink supports a VES/USD price feed on Base, the protocol migrates to it as the authoritative source. Chainlink's decentralized node network, cryptographic guarantees, and circuit breakers replace the off-chain oracle entirely. The vault upgrade path (UUPS) allows the rate-push mechanism to be replaced with a Chainlink-pull model in a single upgrade transaction, with no fund migration required.
 
 ---
 
