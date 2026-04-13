@@ -1,0 +1,12 @@
+{
+  "name": "vesc-oracle-monitor",
+  "version": "1.0.0",
+  "description": "VESC Protocol Oracle monitor — on-chain staleness checker with Telegram alerts",
+  "main": "monitor.js",
+  "scripts": {
+    "start": "node monitor.js"
+  },
+  "dependencies": {
+    "ethers": "^6.0.0"
+  }
+}

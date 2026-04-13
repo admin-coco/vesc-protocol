@@ -1,0 +1,11 @@
+[build]
+builder = "nixpacks"
+buildCommand = "npm install"
+
+[deploy]
+cronSchedule = "*/20 * * * *"
+startCommand = "node monitor.js"
+restartPolicyType = "on_failure"
+
+[nixpacks]
+pkgs = ["nodejs_20"]
