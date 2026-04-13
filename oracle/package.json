@@ -4,7 +4,8 @@
   "description": "VESC Protocol VES/USD Rate Oracle",
   "main": "rate-updater.js",
   "scripts": {
-    "start": "node rate-updater.js --watch"
+    "start": "node rate-updater.js --watch",
+    "test":  "node test-circuit-breaker.js"
   },
   "dependencies": {
     "ethers": "^6.0.0"

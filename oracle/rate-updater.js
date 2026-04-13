@@ -35,6 +35,7 @@ const CONFIG = {
   MAX_CHANGE_PCT:    20,
   MIN_CHANGE_PCT:    0.1,
   INTERVAL_MINUTES:  15,
+  SPREAD_HALT_BPS:   100, // halt oracle if USDT/USDC spread > 1% — vault staleness guard blocks mint/burn after 30 min
 };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -84,6 +85,35 @@ function httpGet(url, headers) {
     req.setTimeout(10000, () => { req.destroy(); reject(new Error("Request timed out")); });
     req.end();
   });
+}
+
+// ─── USDT/USDC basis spread checker ───────────────────────────────────────
+// Reads the USDT/USDC spot price from Binance spot API (public, no auth).
+// Returns { price, spreadBps, direction } or null if the fetch fails.
+// Logs WARN if spread > 50 bps. Caller halts the rate push if > SPREAD_HALT_BPS.
+
+async function fetchUsdtUsdcSpread() {
+  try {
+    const data = await httpGet(
+      "https://api.binance.com/api/v3/ticker/price?symbol=USDCUSDT",
+      { "User-Agent": "vesc-oracle/2.0" }
+    );
+    // USDCUSDT price = how many USDT to buy 1 USDC.
+    // If USDT is at a discount, 1 USDC costs > 1 USDT → price > 1 → USDC is the premium asset.
+    // Spread bps = abs(1 - price) * 10000
+    const price = parseFloat(data.price);
+    const spreadBps = Math.abs(1 - price) * 10_000;
+    const direction = price > 1 ? "USDT_DISCOUNT" : price < 1 ? "USDC_DISCOUNT" : "AT_PARITY";
+    if (spreadBps > 50) {
+      log("WARN", `USDT/USDC spread elevated — ${spreadBps.toFixed(1)} bps (${direction})`, { usdcUsdtPrice: price });
+    } else {
+      log("INFO", `USDT/USDC spread nominal — ${spreadBps.toFixed(1)} bps`, { usdcUsdtPrice: price });
+    }
+    return { price, spreadBps, direction };
+  } catch (e) {
+    log("WARN", `USDT/USDC spread fetch failed (non-fatal): ${e.message}`);
+    return null;
+  }
 }
 
 // ─── Fetch both VES/USD rates from Coco FX API ─────────────────────────────
@@ -185,6 +215,15 @@ async function updateRates() {
   if (apiSell > apiBuy) {
     log("ERROR", "sell rate exceeds buy rate — aborting", { apiBuy, apiSell });
     return { success: false, reason: "invalid_spread" };
+  }
+
+  // Check USDT/USDC basis spread — halt rate push if spread exceeds threshold.
+  // When halted, the on-chain rate ages until MAX_RATE_STALENESS (30 min) is reached,
+  // at which point the vault's own staleness guard blocks all mint() and burn() calls.
+  const spread = await fetchUsdtUsdcSpread();
+  if (spread && spread.spreadBps > CONFIG.SPREAD_HALT_BPS) {
+    log("WARN", `USDT/USDC spread ${spread.spreadBps.toFixed(1)} bps exceeds halt threshold ${CONFIG.SPREAD_HALT_BPS} bps — halting rate push to trigger vault staleness guard`, { direction: spread.direction });
+    return { success: false, reason: "spread_halt", spreadBps: spread.spreadBps, direction: spread.direction };
   }
 
   let onChain;
