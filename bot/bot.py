@@ -172,9 +172,9 @@ def get_pool_state() -> dict:
 
     ticks_to_lower = current_tick - tick_lower
     ticks_to_upper = tick_upper   - current_tick
-    # approximate % distance: each tick is 0.01%
-    pct_to_lower = ticks_to_lower * 0.01
-    pct_to_upper = ticks_to_upper * 0.01
+    # true price % distance via 1.0001^n - 1
+    pct_to_lower = (1.0001 ** ticks_to_lower - 1) * 100
+    pct_to_upper = (1.0001 ** ticks_to_upper - 1) * 100
 
     return {
         "current_tick":              current_tick,
