@@ -33,8 +33,9 @@ if (fs.existsSync(envPath)) {
 const CONFIG = {
   VAULT_ADDRESS:     process.env.VAULT_ADDRESS     || "0x50f50cf026837ab49f337927d2b3269a7dedbc60",
   RPC_URL:           process.env.RPC_URL            || "https://mainnet.base.org",
-  KEYSTORE_JSON:     process.env.KEYSTORE_JSON,
-  KEYSTORE_PASSWORD: process.env.KEYSTORE_PASSWORD,
+  ORACLE_PRIVATE_KEY: process.env.ORACLE_PRIVATE_KEY,
+  KEYSTORE_JSON:      process.env.KEYSTORE_JSON,
+  KEYSTORE_PASSWORD:  process.env.KEYSTORE_PASSWORD,
 
   // Binance P2P
   ROWS:              parseInt(process.env.BINANCE_ROWS    || "20"),
@@ -256,9 +257,12 @@ async function main() {
   const watchMode = process.argv.includes("--watch");
   const port      = CONFIG.PORT;
 
-  // Validate required env vars
-  if (!CONFIG.KEYSTORE_JSON)     throw new Error("KEYSTORE_JSON not set");
-  if (!CONFIG.KEYSTORE_PASSWORD) throw new Error("KEYSTORE_PASSWORD not set");
+  // Validate signer credentials
+  const hasPrivKey   = !!CONFIG.ORACLE_PRIVATE_KEY;
+  const hasKeystore  = !!(CONFIG.KEYSTORE_JSON && CONFIG.KEYSTORE_PASSWORD);
+  if (!hasPrivKey && !hasKeystore) {
+    throw new Error("No signer credentials: set ORACLE_PRIVATE_KEY or both KEYSTORE_JSON+KEYSTORE_PASSWORD");
+  }
 
   // Start HTTP server first so Railway health checks pass immediately
   server.start(port);

@@ -38,10 +38,21 @@ function weiToRate(wei) {
  */
 async function buildSigner(config) {
   const provider = new ethers.JsonRpcProvider(config.RPC_URL);
-  const wallet   = await ethers.Wallet.fromEncryptedJson(
-    config.KEYSTORE_JSON,
-    config.KEYSTORE_PASSWORD,
-  );
+
+  // Prefer plain private key (ORACLE_PRIVATE_KEY) — simpler, no decryption ambiguity.
+  // Fall back to encrypted keystore (KEYSTORE_JSON + KEYSTORE_PASSWORD) if set.
+  let wallet;
+  if (config.ORACLE_PRIVATE_KEY) {
+    wallet = new ethers.Wallet(config.ORACLE_PRIVATE_KEY);
+  } else if (config.KEYSTORE_JSON && config.KEYSTORE_PASSWORD) {
+    wallet = await ethers.Wallet.fromEncryptedJson(
+      config.KEYSTORE_JSON,
+      config.KEYSTORE_PASSWORD,
+    );
+  } else {
+    throw new Error("No signer credentials: set ORACLE_PRIVATE_KEY or KEYSTORE_JSON+KEYSTORE_PASSWORD");
+  }
+
   return wallet.connect(provider);
 }
 
