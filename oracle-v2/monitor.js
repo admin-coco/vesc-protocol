@@ -16,7 +16,7 @@
  * Exit 1 → rate is stale (Railway cron: triggers alert)
  */
 
-const https   = require("fs") && require("https");
+const https   = require("https");
 const fs      = require("fs");
 const path    = require("path");
 const { ethers } = require("ethers");
