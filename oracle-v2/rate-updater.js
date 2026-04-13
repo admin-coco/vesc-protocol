@@ -139,12 +139,18 @@ async function updateRates() {
       MIN_ADS:    CONFIG.MIN_ADS,
       TIMEOUT_MS: CONFIG.TIMEOUT_MS,
     });
-    log("INFO", "Binance P2P rates fetched", {
-      buy:        p2pRates.buy.toFixed(4),
-      sell:       p2pRates.sell.toFixed(4),
-      buyAds:     p2pRates.buyAdsUsed,
-      sellAds:    p2pRates.sellAdsUsed,
-    });
+    if (p2pRates.inverted) {
+      log("WARN", "P2P order book inverted (BUY bids > SELL asks) — using higher as buyRate", {
+        buy: p2pRates.buy.toFixed(4), sell: p2pRates.sell.toFixed(4),
+      });
+    } else {
+      log("INFO", "Binance P2P rates fetched", {
+        buy:     p2pRates.buy.toFixed(4),
+        sell:    p2pRates.sell.toFixed(4),
+        buyAds:  p2pRates.buyAdsUsed,
+        sellAds: p2pRates.sellAdsUsed,
+      });
+    }
     server.setRates(p2pRates);
   } catch (e) {
     log("ERROR", `Binance P2P fetch failed: ${e.message}`);

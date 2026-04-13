@@ -192,22 +192,25 @@ async function fetchBinanceRates(cfg = {}) {
     fetchP2PSide("BUY",  cfg),
   ]);
 
-  const buyResult  = weightedMedian(sellAds, "SELL", cfg); // SELL ads → buyRate  (higher)
-  const sellResult = weightedMedian(buyAds,  "BUY",  cfg); // BUY  ads → sellRate (lower)
+  const sellSideResult = weightedMedian(sellAds, "SELL", cfg);
+  const buySideResult  = weightedMedian(buyAds,  "BUY",  cfg);
 
-  if (sellResult.rate > buyResult.rate) {
-    throw new Error(
-      `sellRate (${sellResult.rate}) > buyRate (${buyResult.rate}) — spread integrity violated`
-    );
-  }
+  // Normally SELL-side median > BUY-side median (ask > bid).
+  // On thin VES markets, BUY bids occasionally spike above SELL asks.
+  // In that case take the higher value as buyRate regardless of side.
+  const buyRate  = Math.max(sellSideResult.rate, buySideResult.rate);
+  const sellRate = Math.min(sellSideResult.rate, buySideResult.rate);
+
+  const inverted = buySideResult.rate > sellSideResult.rate;
 
   return {
-    buy:          buyResult.rate,
-    sell:         sellResult.rate,
-    buyAdsUsed:   buyResult.adsUsed,
-    sellAdsUsed:  sellResult.adsUsed,
-    buySimple:    buyResult.simpleMedian,
-    sellSimple:   sellResult.simpleMedian,
+    buy:          buyRate,
+    sell:         sellRate,
+    buyAdsUsed:   sellSideResult.adsUsed,
+    sellAdsUsed:  buySideResult.adsUsed,
+    buySimple:    sellSideResult.simpleMedian,
+    sellSimple:   buySideResult.simpleMedian,
+    inverted,
     fetchedAt:    new Date().toISOString(),
   };
 }
