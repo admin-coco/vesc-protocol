@@ -126,13 +126,16 @@ def get_buy_sell_rates() -> tuple[Decimal, Decimal]:
 
 
 def format_rates(buy: Decimal, sell: Decimal) -> str:
+    # Vault mint() uses sellRate (lower), burn() uses buyRate (higher)
+    mint_rate = sell   # sellRate — what user gets when minting
+    burn_rate = buy    # buyRate  — what user gets when burning (more VESC needed per dollar)
     spread_pct = (buy - sell) / sell * 100
     return (
-        f"🟢 *Buy  (mint VESC):* `1 USD = {buy:,.4f} VES`\n"
-        f"🔴 *Sell (burn VESC):* `1 USD = {sell:,.4f} VES`\n"
+        f"🟢 *Mint VESC:* `1 USDC = {mint_rate:,.4f} VESC`\n"
+        f"🔴 *Burn VESC:* `1 USDC = {burn_rate:,.4f} VESC`\n"
         f"📊 *Spread:* `{spread_pct:.2f}%`\n\n"
-        f"  1 VESC ≈ `{(1/buy):.8f} USDC` (mint)\n"
-        f"  1 VESC ≈ `{(1/sell):.8f} USDC` (burn)"
+        f"  1 VESC ≈ `{(1/mint_rate):.8f} USDC` (mint)\n"
+        f"  1 VESC ≈ `{(1/burn_rate):.8f} USDC` (burn)"
     )
 
 
@@ -230,21 +233,21 @@ async def cmd_quote(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     if direction == "mint":
-        vesc_out = amount * buy
+        vesc_out = amount * sell  # vault mint() uses sellRate
         await update.message.reply_text(
             f"🪙 *Mint Quote*\n\n"
             f"  Pay: `{amount:,.2f} USDC`\n"
             f"  Get: `{vesc_out:,.4f} VESC`\n\n"
-            f"  Buy rate: `1 USD = {buy:,.4f} VES`",
+            f"  Mint rate: `1 USDC = {sell:,.4f} VESC`",
             parse_mode="Markdown",
         )
     else:
-        usdc_out = amount / sell
+        usdc_out = amount / buy  # vault burn() uses buyRate
         await update.message.reply_text(
             f"🔥 *Burn Quote*\n\n"
             f"  Burn: `{amount:,.4f} VESC`\n"
             f"  Get:  `{usdc_out:,.6f} USDC`\n\n"
-            f"  Sell rate: `1 USD = {sell:,.4f} VES`",
+            f"  Burn rate: `1 USDC = {buy:,.4f} VESC`",
             parse_mode="Markdown",
         )
 
