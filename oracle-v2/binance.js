@@ -6,9 +6,9 @@
  * Fetches USDT/VES buy and sell rates from Binance P2P using a
  * liquidity-weighted median across the top 20 ads per side.
  *
- * Rate mapping (advertiser perspective is inverse of VESC user perspective):
- *   SELL ads (merchants selling USDT) → user buys USDT with VES to mint VESC → buyRate
- *   BUY  ads (merchants buying USDT)  → user sells USDT for VES to burn VESC → sellRate
+ * Rate mapping (advertiser perspective):
+ *   BUY  ads (merchants buying USDT)  → high VES/USDT price → vault buyRate  (mint)
+ *   SELL ads (merchants selling USDT) → low  VES/USDT price → vault sellRate (burn)
  */
 
 const https = require("https");
@@ -180,17 +180,22 @@ async function fetchP2PSide(tradeType, cfg = {}) {
  * Fetch both sides in parallel and compute weighted median for each.
  * Returns { buy, sell, buyAdsUsed, sellAdsUsed, fetchedAt }
  *
- * buy  = weighted median of SELL ads → vault buyRate  (mint rate)
- * sell = weighted median of BUY  ads → vault sellRate (burn rate)
+ * Binance P2P tradeType from the ADVERTISER's perspective:
+ *   BUY  ads = merchants wanting to BUY USDT (they pay VES, high VES/USDT price)
+ *              → vault buyRate  (user mints VESC: deposits USDC, gets VES-equivalent)
+ *   SELL ads = merchants wanting to SELL USDT (they receive VES, low VES/USDT price)
+ *              → vault sellRate (user burns VESC: returns USDC, less VES-equivalent)
+ *
+ * Result: buy > sell (buy rate is always higher in VES/USDT terms)
  */
 async function fetchBinanceRates(cfg = {}) {
-  const [sellAds, buyAds] = await Promise.all([
-    fetchP2PSide("SELL", cfg),
+  const [buyAds, sellAds] = await Promise.all([
     fetchP2PSide("BUY",  cfg),
+    fetchP2PSide("SELL", cfg),
   ]);
 
-  const buyResult  = weightedMedian(sellAds, "SELL", cfg); // SELL ads → buyRate
-  const sellResult = weightedMedian(buyAds,  "BUY",  cfg); // BUY  ads → sellRate
+  const buyResult  = weightedMedian(buyAds,  "BUY",  cfg); // BUY  ads → buyRate  (higher)
+  const sellResult = weightedMedian(sellAds, "SELL", cfg); // SELL ads → sellRate (lower)
 
   if (sellResult.rate > buyResult.rate) {
     throw new Error(
