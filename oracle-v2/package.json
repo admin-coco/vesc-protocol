@@ -1,0 +1,13 @@
+{
+  "name": "vesc-oracle-v2",
+  "version": "1.0.0",
+  "description": "VESC Protocol Oracle v2 — Binance P2P weighted median rate pusher",
+  "main": "rate-updater.js",
+  "scripts": {
+    "start": "node rate-updater.js --watch",
+    "test":  "node test.js"
+  },
+  "dependencies": {
+    "ethers": "^6.0.0"
+  }
+}
