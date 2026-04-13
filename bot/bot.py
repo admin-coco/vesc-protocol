@@ -126,9 +126,11 @@ def get_buy_sell_rates() -> tuple[Decimal, Decimal]:
 
 
 def format_rates(buy: Decimal, sell: Decimal) -> str:
+    spread_pct = (buy - sell) / sell * 100
     return (
         f"🟢 *Buy  (mint VESC):* `1 USD = {buy:,.4f} VES`\n"
-        f"🔴 *Sell (burn VESC):* `1 USD = {sell:,.4f} VES`\n\n"
+        f"🔴 *Sell (burn VESC):* `1 USD = {sell:,.4f} VES`\n"
+        f"📊 *Spread:* `{spread_pct:.2f}%`\n\n"
         f"  1 VESC ≈ `{(1/buy):.8f} USDC` (mint)\n"
         f"  1 VESC ≈ `{(1/sell):.8f} USDC` (burn)"
     )
