@@ -1,0 +1,10 @@
+[build]
+builder = "nixpacks"
+buildCommand = "pip install -r requirements.txt"
+
+[deploy]
+startCommand = "python bot.py"
+restartPolicyType = "always"
+
+[nixpacks]
+pkgs = ["python312"]
