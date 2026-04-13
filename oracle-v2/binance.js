@@ -7,8 +7,8 @@
  * liquidity-weighted median across the top 20 ads per side.
  *
  * Rate mapping (advertiser perspective):
- *   BUY  ads (merchants buying USDT)  → high VES/USDT price → vault buyRate  (mint)
- *   SELL ads (merchants selling USDT) → low  VES/USDT price → vault sellRate (burn)
+ *   SELL ads (merchants selling USDT) → high VES/USDT price → vault buyRate  (mint)
+ *   BUY  ads (merchants buying USDT)  → low  VES/USDT price → vault sellRate (burn)
  */
 
 const https = require("https");
@@ -181,21 +181,19 @@ async function fetchP2PSide(tradeType, cfg = {}) {
  * Returns { buy, sell, buyAdsUsed, sellAdsUsed, fetchedAt }
  *
  * Binance P2P tradeType from the ADVERTISER's perspective:
- *   BUY  ads = merchants wanting to BUY USDT (they pay VES, high VES/USDT price)
- *              → vault buyRate  (user mints VESC: deposits USDC, gets VES-equivalent)
- *   SELL ads = merchants wanting to SELL USDT (they receive VES, low VES/USDT price)
- *              → vault sellRate (user burns VESC: returns USDC, less VES-equivalent)
+ *   SELL ads = merchants selling USDT → they list at HIGH VES prices → vault buyRate  (mint)
+ *   BUY  ads = merchants buying USDT  → they bid at LOW  VES prices → vault sellRate (burn)
  *
- * Result: buy > sell (buy rate is always higher in VES/USDT terms)
+ * Result: buy > sell (SELL-side median always higher than BUY-side median)
  */
 async function fetchBinanceRates(cfg = {}) {
-  const [buyAds, sellAds] = await Promise.all([
-    fetchP2PSide("BUY",  cfg),
+  const [sellAds, buyAds] = await Promise.all([
     fetchP2PSide("SELL", cfg),
+    fetchP2PSide("BUY",  cfg),
   ]);
 
-  const buyResult  = weightedMedian(buyAds,  "BUY",  cfg); // BUY  ads → buyRate  (higher)
-  const sellResult = weightedMedian(sellAds, "SELL", cfg); // SELL ads → sellRate (lower)
+  const buyResult  = weightedMedian(sellAds, "SELL", cfg); // SELL ads → buyRate  (higher)
+  const sellResult = weightedMedian(buyAds,  "BUY",  cfg); // BUY  ads → sellRate (lower)
 
   if (sellResult.rate > buyResult.rate) {
     throw new Error(
