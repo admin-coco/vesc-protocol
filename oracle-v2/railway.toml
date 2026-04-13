@@ -1,9 +1,9 @@
 [build]
 builder = "nixpacks"
-buildCommand = "cd oracle-v2 && npm install"
+buildCommand = "npm install"
 
 [deploy]
-startCommand = "node oracle-v2/rate-updater.js --watch"
+startCommand = "node rate-updater.js --watch"
 restartPolicyType = "on_failure"
 
 [nixpacks]
