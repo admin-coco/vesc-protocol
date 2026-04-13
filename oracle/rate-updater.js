@@ -88,28 +88,29 @@ function httpGet(url, headers) {
 }
 
 // ─── USDT/USDC basis spread checker ───────────────────────────────────────
-// Reads the USDT/USDC spot price from Binance spot API (public, no auth).
-// Returns { price, spreadBps, direction } or null if the fetch fails.
+// Fetches USDT/USD and USDC/USD spot prices from Coinbase (no auth, no geo-block).
+// Spread = abs(usdt_usd - usdc_usd) × 10000 bps.
+// Returns { usdtUsd, usdcUsd, spreadBps, direction } or null if fetch fails.
 // Logs WARN if spread > 50 bps. Caller halts the rate push if > SPREAD_HALT_BPS.
 
 async function fetchUsdtUsdcSpread() {
   try {
-    const data = await httpGet(
-      "https://api.binance.com/api/v3/ticker/price?symbol=USDCUSDT",
-      { "User-Agent": "vesc-oracle/2.0" }
-    );
-    // USDCUSDT price = how many USDT to buy 1 USDC.
-    // If USDT is at a discount, 1 USDC costs > 1 USDT → price > 1 → USDC is the premium asset.
-    // Spread bps = abs(1 - price) * 10000
-    const price = parseFloat(data.price);
-    const spreadBps = Math.abs(1 - price) * 10_000;
-    const direction = price > 1 ? "USDT_DISCOUNT" : price < 1 ? "USDC_DISCOUNT" : "AT_PARITY";
+    const [usdtData, usdcData] = await Promise.all([
+      httpGet("https://api.coinbase.com/v2/prices/USDT-USD/spot", { "User-Agent": "vesc-oracle/2.0" }),
+      httpGet("https://api.coinbase.com/v2/prices/USDC-USD/spot", { "User-Agent": "vesc-oracle/2.0" }),
+    ]);
+    const usdtUsd   = parseFloat(usdtData.data.amount);
+    const usdcUsd   = parseFloat(usdcData.data.amount);
+    const spreadBps = Math.abs(usdtUsd - usdcUsd) * 10_000;
+    const direction = usdtUsd < usdcUsd ? "USDT_DISCOUNT"
+                    : usdtUsd > usdcUsd ? "USDC_DISCOUNT"
+                    : "AT_PARITY";
     if (spreadBps > 50) {
-      log("WARN", `USDT/USDC spread elevated — ${spreadBps.toFixed(1)} bps (${direction})`, { usdcUsdtPrice: price });
+      log("WARN", `USDT/USDC spread elevated — ${spreadBps.toFixed(1)} bps (${direction})`, { usdtUsd, usdcUsd });
     } else {
-      log("INFO", `USDT/USDC spread nominal — ${spreadBps.toFixed(1)} bps`, { usdcUsdtPrice: price });
+      log("INFO", `USDT/USDC spread nominal — ${spreadBps.toFixed(1)} bps`, { usdtUsd, usdcUsd });
     }
-    return { price, spreadBps, direction };
+    return { usdtUsd, usdcUsd, spreadBps, direction };
   } catch (e) {
     log("WARN", `USDT/USDC spread fetch failed (non-fatal): ${e.message}`);
     return null;

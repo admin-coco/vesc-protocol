@@ -27,14 +27,14 @@ function assert(condition, label) {
 
 // ─── Inline the spread calculation logic (matches rate-updater.js exactly) ──
 // We test the pure math in isolation — no HTTP calls, no ethers, no env vars.
+// Source: Coinbase USDT/USD and USDC/USD spot prices (two separate values).
 
-function computeSpread(usdcUsdtPrice) {
-  const price      = parseFloat(usdcUsdtPrice);
-  const spreadBps  = Math.abs(1 - price) * 10_000;
-  const direction  = price > 1 ? "USDT_DISCOUNT"
-                   : price < 1 ? "USDC_DISCOUNT"
-                   : "AT_PARITY";
-  return { price, spreadBps, direction };
+function computeSpread(usdtUsd, usdcUsd) {
+  const spreadBps = Math.abs(usdtUsd - usdcUsd) * 10_000;
+  const direction = usdtUsd < usdcUsd ? "USDT_DISCOUNT"
+                  : usdtUsd > usdcUsd ? "USDC_DISCOUNT"
+                  : "AT_PARITY";
+  return { usdtUsd, usdcUsd, spreadBps, direction };
 }
 
 function shouldHalt(spread, haltThresholdBps) {
@@ -48,65 +48,65 @@ console.log("\nVESC Oracle — Circuit Breaker Tests\n");
 // 1. Spread calculation — at parity
 console.log("1. Spread calculation");
 {
-  const s = computeSpread("1.0000");
-  assert(s.spreadBps === 0,         "USDCUSDT=1.0000 → spreadBps=0");
-  assert(s.direction === "AT_PARITY","USDCUSDT=1.0000 → direction=AT_PARITY");
+  const s = computeSpread(1.0000, 1.0000);
+  assert(s.spreadBps === 0,          "USDT=$1.00 USDC=$1.00 → spreadBps=0");
+  assert(s.direction === "AT_PARITY","USDT=$1.00 USDC=$1.00 → direction=AT_PARITY");
 }
 
-// 2. USDT discount (USDCUSDT > 1 → need more USDT to buy 1 USDC → USDT is cheap)
+// 2. USDT discount (USDT < USDC → USDT is cheap)
 {
-  const s = computeSpread("1.0100"); // USDT at $0.99 approx
-  assert(Math.abs(s.spreadBps - 100) < 0.01, "USDCUSDT=1.0100 → spreadBps=100");
-  assert(s.direction === "USDT_DISCOUNT",     "USDCUSDT=1.0100 → direction=USDT_DISCOUNT");
+  const s = computeSpread(0.9900, 1.0000); // USDT at $0.99
+  assert(Math.abs(s.spreadBps - 100) < 0.01, "USDT=$0.99 USDC=$1.00 → spreadBps=100");
+  assert(s.direction === "USDT_DISCOUNT",     "USDT=$0.99 USDC=$1.00 → direction=USDT_DISCOUNT");
 }
 
-// 3. USDC discount (USDCUSDT < 1 → USDC trades below USDT → USDC is cheap)
+// 3. USDC discount (USDC < USDT → USDC is cheap)
 {
-  const s = computeSpread("0.9700"); // USDC at $0.97 approx
-  assert(Math.abs(s.spreadBps - 300) < 0.01, "USDCUSDT=0.9700 → spreadBps=300");
-  assert(s.direction === "USDC_DISCOUNT",     "USDCUSDT=0.9700 → direction=USDC_DISCOUNT");
+  const s = computeSpread(1.0000, 0.9700); // USDC at $0.97
+  assert(Math.abs(s.spreadBps - 300) < 0.01, "USDT=$1.00 USDC=$0.97 → spreadBps=300");
+  assert(s.direction === "USDC_DISCOUNT",     "USDT=$1.00 USDC=$0.97 → direction=USDC_DISCOUNT");
 }
 
 // 4. SVB-level USDC depeg (USDC ≈ $0.87)
 {
-  const s = computeSpread("0.8700");
-  assert(s.spreadBps > 1000,              "USDCUSDT=0.8700 → spreadBps > 1000 bps");
-  assert(s.direction === "USDC_DISCOUNT", "USDCUSDT=0.8700 → direction=USDC_DISCOUNT");
+  const s = computeSpread(1.0000, 0.8700);
+  assert(s.spreadBps > 1000,              "USDT=$1.00 USDC=$0.87 → spreadBps > 1000 bps");
+  assert(s.direction === "USDC_DISCOUNT", "USDT=$1.00 USDC=$0.87 → direction=USDC_DISCOUNT");
 }
 
 // 5. Nominal spread — should NOT halt at 100 bps threshold
 console.log("\n2. Circuit breaker halt logic");
 {
   const HALT_BPS = 100;
-  const s = computeSpread("1.0040"); // 40 bps — nominal
+  const s = computeSpread(1.0000, 0.9960); // 40 bps — nominal
   assert(!shouldHalt(s, HALT_BPS), "40 bps spread → should NOT halt (below 100 bps threshold)");
 }
 
 // 6. Just below threshold — should NOT halt (threshold is exclusive: >)
 {
   const HALT_BPS = 100;
-  const s = computeSpread("1.0099"); // ~99 bps — just under threshold
+  const s = computeSpread(1.0000, 0.9901); // ~99 bps
   assert(!shouldHalt(s, HALT_BPS), "99 bps spread → should NOT halt (below 100 bps threshold)");
 }
 
 // 7. One basis point above threshold — SHOULD halt
 {
   const HALT_BPS = 100;
-  const s = computeSpread("1.01011"); // ~101.1 bps
+  const s = computeSpread(1.0000, 0.9899); // ~101 bps
   assert(shouldHalt(s, HALT_BPS), "101 bps spread → SHOULD halt (above 100 bps threshold)");
 }
 
 // 8. USDC depeg at $0.97 (300 bps) — SHOULD halt
 {
   const HALT_BPS = 100;
-  const s = computeSpread("0.9700");
+  const s = computeSpread(1.0000, 0.9700);
   assert(shouldHalt(s, HALT_BPS), "300 bps USDC depeg → SHOULD halt");
 }
 
 // 9. SVB-level at $0.87 — SHOULD halt
 {
   const HALT_BPS = 100;
-  const s = computeSpread("0.8700");
+  const s = computeSpread(1.0000, 0.8700);
   assert(shouldHalt(s, HALT_BPS), "SVB-level USDC=$0.87 → SHOULD halt");
 }
 
@@ -135,6 +135,16 @@ console.log("\n3. CONFIG sanity check");
   assert(result.reason === "spread_halt",       "halt result: reason='spread_halt'");
   assert(typeof result.spreadBps === "number",  "halt result: spreadBps is a number");
   assert(typeof result.direction === "string",  "halt result: direction is a string");
+}
+
+// 13. fetchUsdtUsdcSpread return shape has usdtUsd and usdcUsd fields (not legacy 'price')
+{
+  const s = computeSpread(1.0002, 1.0000);
+  assert("usdtUsd"   in s, "spread result has usdtUsd field");
+  assert("usdcUsd"   in s, "spread result has usdcUsd field");
+  assert(!("price"   in s), "spread result does NOT have legacy 'price' field");
+  assert("spreadBps" in s, "spread result has spreadBps field");
+  assert("direction" in s, "spread result has direction field");
 }
 
 // ─── Results ─────────────────────────────────────────────────────────────────
