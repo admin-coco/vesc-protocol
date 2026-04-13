@@ -395,16 +395,11 @@ def _pool_advice(buy: Decimal, sell: Decimal, ps: dict) -> str:
     liquidity    = ps["liquidity"]
     pct_to_low   = ps["pct_to_lower"]
     pct_to_high  = ps["pct_to_upper"]
-    cur_price    = ps["price_current_usdc_per_vesc"]
-    low_price    = ps["price_lower_usdc_per_vesc"]
-    high_price   = ps["price_upper_usdc_per_vesc"]
 
     # Protocol mid price (from vault rates)
     price_at_buy  = float(Decimal(1) / buy)
     price_at_sell = float(Decimal(1) / sell)
     mid_price     = (price_at_buy + price_at_sell) / 2
-
-    range_status = "🟢 IN RANGE" if in_range else "🔴 OUT OF RANGE"
 
     # Edge warnings
     edge_warn = ""
@@ -437,13 +432,11 @@ def _pool_advice(buy: Decimal, sell: Decimal, ps: dict) -> str:
     else:
         headline = "✅ IN RANGE"
 
-    rebalance = f"\n↩️ [Rebalance on Uniswap]({POOL_URL})" if (not in_range or edge_warn) else ""
-
     return (
         f"[🏊 VESC/USDC]({POOL_URL}) {headline}\n\n"
         f"Tick `{cur_tick}` | ↓`{pct_to_low:.1f}%` lower · ↑`{pct_to_high:.1f}%` upper\n"
         f"Buy `{buy:,.0f}` · Sell `{sell:,.0f}` VES/USD · Mid `{mid_price:.6f}`"
-        f"{rebalance}"
+        f"{rebalance_steps}"
     )
 
 
