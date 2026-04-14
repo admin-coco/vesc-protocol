@@ -537,7 +537,7 @@ def fetch_rate_history(hours: int = 24) -> list[tuple]:
     for log in all_logs:
         block_delta = current - log["blockNumber"]
         ts  = anchor_ts - block_delta * BASE_BLOCK_TIME
-        raw = bytes.fromhex(log["data"].hex())
+        raw = bytes.fromhex(log["data"].hex().removeprefix("0x"))
         vals = [int.from_bytes(raw[i*32:(i+1)*32], "big") / 1e18 for i in range(4)]
         _old_buy, new_buy, _old_sell, new_sell = vals
         points.append((ts, new_buy, new_sell))
