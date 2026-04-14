@@ -16,13 +16,14 @@ const https = require("https");
 const P2P_URL = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search";
 
 const DEFAULTS = {
-  ASSET:       "USDT",
-  FIAT:        "VES",
-  ROWS:        20,
-  MIN_ADS:     10,
-  TIMEOUT_MS:  8000,
-  OUTLIER_PCT: 15,   // drop ads > 15% from simple median
-  CROSS_VAL_PCT: 5,  // abort if weighted vs simple median diverge > 5%
+  ASSET:         "USDT",
+  FIAT:          "VES",
+  ROWS:          20,
+  MIN_ADS:       10,
+  TIMEOUT_MS:    8000,
+  OUTLIER_PCT:   15,   // drop ads > 15% from simple median
+  CROSS_VAL_PCT: 5,    // abort if weighted vs simple median diverge > 5%
+  MAX_WEIGHT_PCT: 30,  // cap any single ad's share of total volume at 30%
 };
 
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
@@ -84,9 +85,10 @@ function httpPost(url, payload, timeoutMs) {
  * @returns {{ rate: number, adsUsed: number, simpleMedian: number, weightedMedian: number }}
  */
 function weightedMedian(ads, side, cfg = {}) {
-  const MIN_ADS      = cfg.MIN_ADS      ?? DEFAULTS.MIN_ADS;
-  const OUTLIER_PCT  = cfg.OUTLIER_PCT  ?? DEFAULTS.OUTLIER_PCT;
-  const CROSS_VAL    = cfg.CROSS_VAL_PCT ?? DEFAULTS.CROSS_VAL_PCT;
+  const MIN_ADS       = cfg.MIN_ADS       ?? DEFAULTS.MIN_ADS;
+  const OUTLIER_PCT   = cfg.OUTLIER_PCT   ?? DEFAULTS.OUTLIER_PCT;
+  const CROSS_VAL     = cfg.CROSS_VAL_PCT ?? DEFAULTS.CROSS_VAL_PCT;
+  const MAX_WEIGHT    = (cfg.MAX_WEIGHT_PCT ?? DEFAULTS.MAX_WEIGHT_PCT) / 100;
 
   // Parse price and quantity — skip ads with invalid values
   const parsed = ads
@@ -115,11 +117,18 @@ function weightedMedian(ads, side, cfg = {}) {
   //       BUY  side descending (highest first = most competitive buyers)
   const sorted = [...filtered].sort((a, b) => side === "SELL" ? a.price - b.price : b.price - a.price);
 
+  // Cap each ad's volume contribution so no single merchant dominates the median.
+  // Without this, a promoted ad with 1800 USDT crosses the 50% threshold alone
+  // and sets the rate regardless of what the rest of the market is doing.
+  const rawTotal = sorted.reduce((s, a) => s + a.qty, 0);
+  const maxQty   = rawTotal * MAX_WEIGHT;
+  const capped   = sorted.map(a => ({ ...a, qty: Math.min(a.qty, maxQty) }));
+
   // Walk by accumulated quantity to find 50th percentile
-  const totalQty = sorted.reduce((s, a) => s + a.qty, 0);
+  const totalQty = capped.reduce((s, a) => s + a.qty, 0);
   let cumQty = 0;
-  let weightedMedianPrice = sorted[sorted.length - 1].price; // fallback to last
-  for (const ad of sorted) {
+  let weightedMedianPrice = capped[capped.length - 1].price; // fallback to last
+  for (const ad of capped) {
     cumQty += ad.qty;
     if (cumQty >= totalQty * 0.5) {
       weightedMedianPrice = ad.price;
