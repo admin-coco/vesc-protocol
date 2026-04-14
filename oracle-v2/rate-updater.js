@@ -168,13 +168,32 @@ async function updateRates() {
     }
   }
 
-  // 4. Max spread guard (buy - sell > MAX_SPREAD_PCT of sell → abnormally wide market)
-  const marketSpreadPct = (apiBuy - apiSell) / apiSell * 100;
-  if (marketSpreadPct > CONFIG.MAX_SPREAD_PCT) {
-    log("WARN", `P2P market spread ${marketSpreadPct.toFixed(2)}% > ${CONFIG.MAX_SPREAD_PCT}% — skipping setRates`, {
+  // 4. Graduated spread response:
+  //   < NORMAL_SPREAD_PCT  → push raw buy/sell as-is
+  //   < MAX_SPREAD_PCT     → collapse to mid-price (keep oracle alive, don't publish junk spread)
+  //   >= MAX_SPREAD_PCT    → halt entirely (market too chaotic)
+  const NORMAL_SPREAD_PCT = CONFIG.MAX_SPREAD_PCT;           // 5%  — normal operating band
+  const CHAOS_SPREAD_PCT  = parseFloat(process.env.CHAOS_SPREAD_PCT || "25"); // 25% — full halt
+  const marketSpreadPct   = (apiBuy - apiSell) / apiSell * 100;
+  const mid               = (apiBuy + apiSell) / 2;
+
+  let effectiveBuy  = apiBuy;
+  let effectiveSell = apiSell;
+  let spreadMode    = "normal";
+
+  if (marketSpreadPct >= CHAOS_SPREAD_PCT) {
+    log("WARN", `P2P spread ${marketSpreadPct.toFixed(2)}% >= ${CHAOS_SPREAD_PCT}% chaos threshold — halting`, {
       buy: apiBuy, sell: apiSell,
     });
-    return { success: false, reason: "market_spread_too_wide", marketSpreadPct };
+    return { success: false, reason: "market_chaos", marketSpreadPct };
+  } else if (marketSpreadPct >= NORMAL_SPREAD_PCT) {
+    // Collapse to mid-price: keeps vault alive and unstale without publishing a distorted spread
+    effectiveBuy  = mid;
+    effectiveSell = mid;
+    spreadMode    = "mid_collapse";
+    log("WARN", `P2P spread ${marketSpreadPct.toFixed(2)}% — collapsing to mid ${mid.toFixed(2)} (spread compressed to 0)`, {
+      rawBuy: apiBuy, rawSell: apiSell, mid,
+    });
   }
 
   // 5. Read on-chain state
@@ -200,7 +219,7 @@ async function updateRates() {
     return { success: false, reason: "signer_error", error: e.message };
   }
 
-  // 7. Always record on-chain sample (chart history)
+  // 7. Always record on-chain sample (chart history) — use raw P2P rates
   try {
     const receipt = await recordSample(signer, CONFIG, apiBuy, apiSell);
     log("INFO", "Rate sample recorded", { txHash: receipt.hash });
@@ -209,8 +228,8 @@ async function updateRates() {
   }
 
   // 8. Min change check (skip setRates if nothing meaningful changed)
-  const buyChange  = changePct(apiBuy,  onChain.buy);
-  const sellChange = changePct(apiSell, onChain.sell);
+  const buyChange  = changePct(effectiveBuy,  onChain.buy);
+  const sellChange = changePct(effectiveSell, onChain.sell);
   const stalenessSec = Math.floor(Date.now() / 1000) - onChain.lastRateUpdate;
   const forceUpdate  = stalenessSec > CONFIG.MAX_STALENESS_SEC;
 
@@ -226,33 +245,31 @@ async function updateRates() {
   for (const [label, change] of [["buy", buyChange], ["sell", sellChange]]) {
     if (change > CONFIG.MAX_CHANGE_PCT) {
       log("WARN", `${label} rate change ${change.toFixed(2)}% exceeds ${CONFIG.MAX_CHANGE_PCT}% safety limit — HALTING`, {
-        api:     label === "buy" ? apiBuy  : apiSell,
-        onChain: label === "buy" ? onChain.buy : onChain.sell,
+        api:     label === "buy" ? effectiveBuy  : effectiveSell,
+        onChain: label === "buy" ? onChain.buy   : onChain.sell,
       });
       return { success: false, reason: "change_too_large", label, change };
     }
   }
 
-  // 9b. Final spread guard — reject if the rates we're about to push have
-  //     an abnormally wide buy/sell spread regardless of how we got here.
-  //     This catches inverted-book edge cases that slip past the P2P check.
-  const finalSpreadPct = (apiBuy - apiSell) / apiSell * 100;
-  if (finalSpreadPct > CONFIG.MAX_SPREAD_PCT) {
-    log("WARN", `Final spread ${finalSpreadPct.toFixed(2)}% > ${CONFIG.MAX_SPREAD_PCT}% — refusing to push`, {
-      buy: apiBuy, sell: apiSell,
+  // 9b. Final spread guard — catches any edge case that slipped through above
+  const finalSpreadPct = (effectiveBuy - effectiveSell) / effectiveSell * 100;
+  if (finalSpreadPct > NORMAL_SPREAD_PCT) {
+    log("WARN", `Final spread ${finalSpreadPct.toFixed(2)}% > ${NORMAL_SPREAD_PCT}% — refusing to push`, {
+      buy: effectiveBuy, sell: effectiveSell,
     });
     return { success: false, reason: "final_spread_too_wide", finalSpreadPct };
   }
 
   // 10. Push rates on-chain
-  log("INFO", "Sending setRates()", {
-    buy:  { from: onChain.buy.toFixed(4),  to: apiBuy.toFixed(4),  change: `${buyChange.toFixed(3)}%` },
-    sell: { from: onChain.sell.toFixed(4), to: apiSell.toFixed(4), change: `${sellChange.toFixed(3)}%` },
+  log("INFO", `Sending setRates() [mode=${spreadMode}]`, {
+    buy:  { from: onChain.buy.toFixed(4),  to: effectiveBuy.toFixed(4),  change: `${buyChange.toFixed(3)}%` },
+    sell: { from: onChain.sell.toFixed(4), to: effectiveSell.toFixed(4), change: `${sellChange.toFixed(3)}%` },
   });
 
   try {
-    const receipt = await pushRates(signer, CONFIG, apiBuy, apiSell);
-    log("OK", "Rates updated on-chain", { txHash: receipt.hash, buy: apiBuy, sell: apiSell });
+    const receipt = await pushRates(signer, CONFIG, effectiveBuy, effectiveSell);
+    log("OK", "Rates updated on-chain", { txHash: receipt.hash, buy: effectiveBuy, sell: effectiveSell, spreadMode });
     return { success: true, reason: "updated", apiBuy, apiSell, txHash: receipt.hash };
   } catch (e) {
     log("ERROR", `setRates failed: ${e.message}`);
