@@ -47,7 +47,7 @@ const CONFIG = {
   MAX_CHANGE_PCT:    parseFloat(process.env.MAX_CHANGE_PCT   || "20"),
   MIN_CHANGE_PCT:    parseFloat(process.env.MIN_CHANGE_PCT   || "0.1"),
   MAX_STALENESS_SEC: parseInt(process.env.MAX_STALENESS_SEC  || "1500"),   // 25 min
-  MAX_SPREAD_PCT:    parseFloat(process.env.MAX_SPREAD_PCT   || "5"),      // buy-sell spread guard
+  MAX_SPREAD_PCT:    parseFloat(process.env.MAX_SPREAD_PCT   || "8"),      // normal→mid-collapse threshold
 
   // USDT/USDC circuit breaker
   SPREAD_HALT_BPS:   parseFloat(process.env.SPREAD_HALT_BPS || "100"),    // halt if > 1%
@@ -173,7 +173,7 @@ async function updateRates() {
   //   < MAX_SPREAD_PCT     → collapse to mid-price (keep oracle alive, don't publish junk spread)
   //   >= MAX_SPREAD_PCT    → halt entirely (market too chaotic)
   const NORMAL_SPREAD_PCT = CONFIG.MAX_SPREAD_PCT;           // 5%  — normal operating band
-  const CHAOS_SPREAD_PCT  = parseFloat(process.env.CHAOS_SPREAD_PCT || "25"); // 25% — full halt
+  const CHAOS_SPREAD_PCT  = parseFloat(process.env.CHAOS_SPREAD_PCT || "30"); // 30% — full halt
   const marketSpreadPct   = (apiBuy - apiSell) / apiSell * 100;
   const mid               = (apiBuy + apiSell) / 2;
 
