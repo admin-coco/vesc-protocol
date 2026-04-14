@@ -9,14 +9,17 @@ Commands:
   /schedule - configure auto-posts to a channel
   /pool    - live Uniswap v3 pool status + rebalance guidance
   /fees    - uncollected LP fees earned on the Uniswap v3 position
+  /chart   - buy/sell rate chart for last 24h (Caracas time)
   /stop    - stop your active alert
 """
 
+import io
 import os
 import logging
 import math
+import zoneinfo
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from telegram import Update
 from telegram.ext import (
@@ -501,6 +504,151 @@ async def cmd_fees(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── /chart ────────────────────────────────────────────────────────────────
+
+RATES_UPDATED_TOPIC = "0x83ee137d4eea1eef0029a0cb811df31b555f216d3a45c791729e226eb145a7d5"
+CARACAS_TZ = zoneinfo.ZoneInfo("America/Caracas")
+
+
+def fetch_rate_history(hours: int = 24) -> list[tuple]:
+    """Return list of (timestamp, buy, sell) from RatesUpdated events."""
+    current = w3.eth.block_number
+    # ~2s per block on Base; add 10% buffer
+    blocks_back = int(hours * 3600 / 2 * 1.1)
+    start = current - blocks_back
+    chunk = 2000
+    all_logs = []
+    for fb in range(start, current, chunk):
+        tb = min(fb + chunk - 1, current)
+        logs = w3.eth.get_logs({
+            "address": Web3.to_checksum_address(VAULT_ADDRESS),
+            "topics":  [RATES_UPDATED_TOPIC],
+            "fromBlock": fb,
+            "toBlock":   tb,
+        })
+        all_logs.extend(logs)
+
+    points = []
+    for log in all_logs:
+        blk  = w3.eth.get_block(log["blockNumber"])
+        raw  = bytes.fromhex(log["data"].hex())
+        vals = [int.from_bytes(raw[i*32:(i+1)*32], "big") / 1e18 for i in range(4)]
+        _old_buy, new_buy, _old_sell, new_sell = vals
+        points.append((blk["timestamp"], new_buy, new_sell))
+    return points
+
+
+def build_chart(points: list[tuple], hours: int) -> io.BytesIO:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    import matplotlib.patches as mpatches
+
+    times  = [datetime.fromtimestamp(p[0], tz=CARACAS_TZ) for p in points]
+    buys   = [p[1] for p in points]
+    sells  = [p[2] for p in points]
+    spreads = [(b - s) / s * 100 if s > 0 else 0 for b, s in zip(buys, sells)]
+
+    now = datetime.now(tz=CARACAS_TZ)
+    times_ext = times + [now]
+    buys_ext  = buys  + [buys[-1]]
+    sells_ext = sells + [sells[-1]]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 7),
+                                   gridspec_kw={"height_ratios": [3, 1]})
+    fig.patch.set_facecolor("#1a1a2e")
+    for ax in [ax1, ax2]:
+        ax.set_facecolor("#16213e")
+
+    ax1.step(times_ext, buys_ext,  where="post", color="#e74c3c", lw=2, label="Buy (burn)",  zorder=3)
+    ax1.step(times_ext, sells_ext, where="post", color="#2ecc71", lw=2, label="Sell (mint)", zorder=3)
+    ax1.fill_between(times_ext, sells_ext, buys_ext, step="post", alpha=0.12, color="#f39c12")
+    ax1.scatter(times, buys,  color="#e74c3c", s=20, zorder=5)
+    ax1.scatter(times, sells, color="#2ecc71", s=20, zorder=5)
+
+    for i, (t, b, s) in enumerate(zip(times, buys, sells)):
+        t_end = times[i + 1] if i + 1 < len(times) else t + timedelta(minutes=15)
+        sp = (b - s) / s * 100 if s > 0 else 0
+        if sp < 0.02:
+            ax1.axvspan(t, t_end, alpha=0.20, color="#3498db", zorder=1)
+        elif sp > 10:
+            ax1.axvspan(t, t_end, alpha=0.12, color="#e74c3c", zorder=1)
+
+    ax1.legend(handles=[
+        plt.Line2D([0], [0], color="#e74c3c", lw=2, label="Buy rate (burn)"),
+        plt.Line2D([0], [0], color="#2ecc71", lw=2, label="Sell rate (mint)"),
+        mpatches.Patch(color="#3498db", alpha=0.5, label="Mid-collapse (spread >8%)"),
+        mpatches.Patch(color="#e74c3c", alpha=0.4, label="Inverted P2P book (>10%)"),
+    ], facecolor="#0f3460", labelcolor="white", framealpha=0.9, fontsize=8)
+
+    title_date = now.strftime("%Y-%m-%d")
+    ax1.set_title(f"VESC Vault Rates — últimas {hours}h — {title_date} (VET, UTC-4)",
+                  color="white", fontsize=12, pad=8)
+    ax1.set_ylabel("VES / USDC", color="white", fontsize=10)
+    ymin = max(500, min(sells) - 20)
+    ymax = max(buys) + 20
+    ax1.set_ylim(ymin, ymax)
+    ax1.tick_params(colors="#ccc", labelsize=8)
+    for s in ["bottom", "left"]:  ax1.spines[s].set_color("#555")
+    for s in ["top",    "right"]: ax1.spines[s].set_visible(False)
+    ax1.grid(axis="y", color="#2a2a4a", linestyle="--", alpha=0.6)
+    ax1.grid(axis="x", color="#2a2a4a", linestyle="--", alpha=0.3)
+    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M", tz=CARACAS_TZ))
+    ax1.xaxis.set_major_locator(mdates.HourLocator(interval=max(1, hours // 12), tz=CARACAS_TZ))
+    plt.setp(ax1.xaxis.get_majorticklabels(), rotation=30, ha="right")
+
+    bar_colors = ["#3498db" if s < 0.02 else "#e74c3c" if s > 10 else "#f39c12"
+                  for s in spreads]
+    ax2.bar(times, spreads, width=timedelta(minutes=13), color=bar_colors, alpha=0.8, align="edge")
+    ax2.axhline(8,  color="#f39c12", linestyle="--", lw=1, alpha=0.8, label="8% mid-collapse")
+    ax2.axhline(30, color="#e74c3c", linestyle="--", lw=1, alpha=0.7, label="30% halt")
+    ax2.set_ylabel("Spread %", color="white", fontsize=9)
+    ax2.set_ylim(0, max(20, max(spreads) + 2))
+    ax2.tick_params(colors="#ccc", labelsize=8)
+    for s in ["bottom", "left"]:  ax2.spines[s].set_color("#555")
+    for s in ["top",    "right"]: ax2.spines[s].set_visible(False)
+    ax2.grid(axis="y", color="#2a2a4a", linestyle="--", alpha=0.6)
+    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M", tz=CARACAS_TZ))
+    ax2.xaxis.set_major_locator(mdates.HourLocator(interval=max(1, hours // 12), tz=CARACAS_TZ))
+    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=30, ha="right")
+    ax2.legend(facecolor="#0f3460", labelcolor="white", framealpha=0.9, fontsize=8)
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight",
+                facecolor=fig.get_facecolor())
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+async def cmd_chart(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    hours = 24
+    if ctx.args:
+        try:
+            hours = max(1, min(72, int(ctx.args[0])))
+        except ValueError:
+            pass
+
+    msg = await update.message.reply_text(f"⏳ Fetching {hours}h of on-chain rate history...")
+    try:
+        points = fetch_rate_history(hours)
+        if len(points) < 2:
+            await msg.edit_text("❌ Not enough data yet — try again after a few oracle cycles.")
+            return
+        buf = build_chart(points, hours)
+        now_vet = datetime.now(tz=CARACAS_TZ).strftime("%Y-%m-%d %H:%M VET")
+        await update.message.reply_photo(
+            photo=buf,
+            caption=f"📈 VESC buy/sell rates — últimas {hours}h\n🕐 {now_vet}",
+        )
+        await msg.delete()
+    except Exception as e:
+        log.error("chart error: %s", e)
+        await msg.edit_text("❌ Could not generate chart. RPC may be unavailable.")
+
+
 # ── /stop ─────────────────────────────────────────────────────────────────
 
 async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -530,6 +678,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "  /quote burn 500 — USDC you'd get for 500 VESC\n"
         "  /pool — live Uniswap v3 pool status + rebalance guidance\n"
         "  /fees — uncollected LP fees on position #4876709\n"
+        "  /chart — buy/sell rate chart last 24h (or /chart 48 for 48h)\n"
         "  /alert 2.5 — notify when rate moves ±2.5%\n"
         "  /schedule 60 — post rate every 60 min\n"
         "  /stop — cancel all alerts & schedules",
@@ -550,6 +699,7 @@ def main():
     app.add_handler(CommandHandler("schedule", cmd_schedule))
     app.add_handler(CommandHandler("pool",     cmd_pool))
     app.add_handler(CommandHandler("fees",     cmd_fees))
+    app.add_handler(CommandHandler("chart",    cmd_chart))
     app.add_handler(CommandHandler("stop",     cmd_stop))
 
     log.info("Bot starting...")
