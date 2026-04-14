@@ -47,7 +47,7 @@ const CONFIG = {
   MAX_CHANGE_PCT:    parseFloat(process.env.MAX_CHANGE_PCT   || "20"),
   MIN_CHANGE_PCT:    parseFloat(process.env.MIN_CHANGE_PCT   || "0.1"),
   MAX_STALENESS_SEC: parseInt(process.env.MAX_STALENESS_SEC  || "1500"),   // 25 min
-  MAX_SPREAD_PCT:    parseFloat(process.env.MAX_SPREAD_PCT   || "12"),     // buy-sell spread guard
+  MAX_SPREAD_PCT:    parseFloat(process.env.MAX_SPREAD_PCT   || "5"),      // buy-sell spread guard
 
   // USDT/USDC circuit breaker
   SPREAD_HALT_BPS:   parseFloat(process.env.SPREAD_HALT_BPS || "100"),    // halt if > 1%
@@ -231,6 +231,17 @@ async function updateRates() {
       });
       return { success: false, reason: "change_too_large", label, change };
     }
+  }
+
+  // 9b. Final spread guard — reject if the rates we're about to push have
+  //     an abnormally wide buy/sell spread regardless of how we got here.
+  //     This catches inverted-book edge cases that slip past the P2P check.
+  const finalSpreadPct = (apiBuy - apiSell) / apiSell * 100;
+  if (finalSpreadPct > CONFIG.MAX_SPREAD_PCT) {
+    log("WARN", `Final spread ${finalSpreadPct.toFixed(2)}% > ${CONFIG.MAX_SPREAD_PCT}% — refusing to push`, {
+      buy: apiBuy, sell: apiSell,
+    });
+    return { success: false, reason: "final_spread_too_wide", finalSpreadPct };
   }
 
   // 10. Push rates on-chain
