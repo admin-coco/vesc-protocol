@@ -528,14 +528,20 @@ def fetch_rate_history(hours: int = 24) -> list[tuple]:
         })
         all_logs.extend(logs)
 
+    # Get one anchor block to compute timestamps — avoids N sequential get_block calls
+    anchor_block = w3.eth.get_block(current)
+    anchor_ts    = anchor_block["timestamp"]
+    BASE_BLOCK_TIME = 2  # seconds
+
     points = []
     for log in all_logs:
-        blk  = w3.eth.get_block(log["blockNumber"])
-        raw  = bytes.fromhex(log["data"].hex())
+        block_delta = current - log["blockNumber"]
+        ts  = anchor_ts - block_delta * BASE_BLOCK_TIME
+        raw = bytes.fromhex(log["data"].hex())
         vals = [int.from_bytes(raw[i*32:(i+1)*32], "big") / 1e18 for i in range(4)]
         _old_buy, new_buy, _old_sell, new_sell = vals
-        points.append((blk["timestamp"], new_buy, new_sell))
-    return points
+        points.append((ts, new_buy, new_sell))
+    return sorted(points, key=lambda p: p[0])
 
 
 def build_chart(points: list[tuple], hours: int) -> io.BytesIO:
@@ -645,8 +651,9 @@ async def cmd_chart(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         await msg.delete()
     except Exception as e:
-        log.error("chart error: %s", e)
-        await msg.edit_text("❌ Could not generate chart. RPC may be unavailable.")
+        log.error("chart error: %s", e, exc_info=True)
+        await msg.edit_text(f"❌ Chart failed: `{type(e).__name__}: {str(e)[:120]}`",
+                            parse_mode="Markdown")
 
 
 # ── /stop ─────────────────────────────────────────────────────────────────
