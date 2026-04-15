@@ -8,7 +8,7 @@
  * Usage: node test.js
  */
 
-const { weightedMedian } = require("./binance");
+const { weightedMedian, topNSimpleMedian, isPromotedAd } = require("./binance");
 const { rateToWei, weiToRate } = require("./onchain");
 
 let passed = 0;
@@ -58,7 +58,7 @@ console.log("1. Weighted median — basic cases");
 {
   // 10 ads equal liquidity, prices 600–609 → simple median = 604.5, weighted = 604 or 605
   const ads = makeAds(10, 600);
-  const r = weightedMedian(ads, "SELL");
+  const r = weightedMedian(ads, "SELL", { MIN_ADS: 10 });
   assert(r.adsUsed === 10,            "10 equal-liquidity ads: adsUsed=10");
   assert(r.rate >= 604 && r.rate <= 605, "10 equal-liquidity ads: weighted median in 604–605");
   assert(Math.abs(r.simpleMedian - 604.5) < 0.01, "simple median = 604.5");
@@ -71,7 +71,7 @@ console.log("1. Weighted median — basic cases");
     makeAd(600, 100_000),           // dominant ad
     ...makeAds(4, 602, 2, 10),     // high-price ads, tiny liquidity
   ];
-  const r = weightedMedian(ads, "SELL");
+  const r = weightedMedian(ads, "SELL", { MIN_ADS: 10 });
   assert(r.rate === 600, "dominant liquidity ad at 600 → weighted median = 600");
 }
 
@@ -85,7 +85,7 @@ console.log("\n2. Outlier filtering");
     makeAd(1200, 5000),
     makeAd(1300, 5000),
   ];
-  const r = weightedMedian(ads, "SELL");
+  const r = weightedMedian(ads, "SELL", { MIN_ADS: 15 });
   assert(r.adsUsed === 15, "outliers at 1200/1300 removed — 15 ads remaining");
   assert(r.rate < 650,    "weighted median unaffected by outliers");
 }
@@ -137,7 +137,7 @@ console.log("\n4. Cross-validation (weighted vs simple median)");
 {
   // 10 ads equal weight, prices clustered → weighted ≈ simple → no throw
   const ads = makeAds(10, 598, 1);
-  const r = weightedMedian(ads, "SELL");
+  const r = weightedMedian(ads, "SELL", { MIN_ADS: 10 });
   assert(typeof r.rate === "number", "equal-weight clustered ads: no cross-val throw");
 }
 
@@ -153,7 +153,7 @@ console.log("\n4. Cross-validation (weighted vs simple median)");
     ...Array.from({ length: 5  }, () => makeAd(630, 1_000_000)),
   ];
   assertThrows(
-    () => weightedMedian(ads, "SELL", { CROSS_VAL_PCT: 2, OUTLIER_PCT: 15 }),
+    () => weightedMedian(ads, "SELL", { CROSS_VAL_PCT: 2, OUTLIER_PCT: 15, MIN_ADS: 10 }),
     "diverge",
     "extreme liquidity skew diverges weighted vs simple > 2% → cross-validation throws",
   );
@@ -166,14 +166,14 @@ console.log("\n5. Sort direction (SELL ascending, BUY descending)");
   // SELL side: sorted ascending → 50th percentile near bottom of range
   // 10 ads: prices 600,601,...609, equal qty
   const ads = makeAds(10, 600, 1);
-  const r = weightedMedian(ads, "SELL");
+  const r = weightedMedian(ads, "SELL", { MIN_ADS: 10 });
   assert(r.rate <= 605, "SELL side: weighted median at or below midpoint (ascending sort)");
 }
 
 {
   // BUY side: sorted descending → 50th percentile near top of range
   const ads = makeAds(10, 600, 1);
-  const r = weightedMedian(ads, "BUY");
+  const r = weightedMedian(ads, "BUY", { MIN_ADS: 10 });
   assert(r.rate >= 604, "BUY side: weighted median at or above midpoint (descending sort)");
 }
 
@@ -189,12 +189,61 @@ console.log("\n6. Invalid ad filtering");
     { adv: null },                                            // null adv
     {},                                                       // no adv key
   ];
-  const r = weightedMedian(ads, "SELL");
+  const r = weightedMedian(ads, "SELL", { MIN_ADS: 10 });
   assert(r.adsUsed === 10, "invalid ads silently dropped — 10 valid ads used");
 }
 
-// ─── 7. Rate encoding (rateToWei / weiToRate) ─────────────────────────────────
-console.log("\n7. Rate encoding — rateToWei / weiToRate roundtrip");
+// ─── 7. Promoted ad filtering ─────────────────────────────────────────────────
+console.log("\n7. Promoted ad filtering");
+
+function makeRawAd(price, qty, privilegeType = null) {
+  return {
+    privilegeType,
+    privilegeDesc: privilegeType !== null ? "Promoted Ad" : null,
+    adv: { price: String(price), tradableQuantity: String(qty) },
+  };
+}
+
+{
+  // isPromotedAd: null → false, 8 → true
+  assert(!isPromotedAd(makeRawAd(600, 1000, null)),  "privilegeType=null → not promoted");
+  assert( isPromotedAd(makeRawAd(600, 1000, 8)),     "privilegeType=8   → promoted");
+  assert( isPromotedAd(makeRawAd(600, 1000, 1)),     "privilegeType=1   → promoted");
+}
+
+{
+  // Promoted ad at extreme price is excluded — weighted median uses only organic ads
+  const ads = [
+    makeRawAd(9999, 999_999, 8),  // promoted at absurd price — must be excluded
+    ...Array.from({ length: 10 }, (_, i) => makeRawAd(620 + i, 1000)),
+  ];
+  const r = weightedMedian(ads, "SELL", { MIN_ADS: 10 });
+  assert(r.promotedAdsRemoved === 1,       "1 promoted ad removed");
+  assert(r.adsUsed === 10,                 "10 organic ads used");
+  assert(r.rate < 700,                     "promoted ad at 9999 did not affect rate");
+}
+
+{
+  // topNSimpleMedian: first 5 of 10 organic ads
+  const organicAds = Array.from({ length: 10 }, (_, i) => makeRawAd(620 + i, 1000));
+  const result = topNSimpleMedian(organicAds, 5);
+  // First 5 prices: 620, 621, 622, 623, 624 → median = 622
+  assert(result.topNCount === 5,           "topNCount = 5");
+  assert(result.topNMedian === 622,        "top-5 simple median = 622");
+  assert(result.topNPrices.length === 5,   "topNPrices has 5 entries");
+}
+
+{
+  // weightedMedian exposes topNMedian in result
+  const ads = Array.from({ length: 15 }, (_, i) => makeRawAd(630 + i, 1000));
+  const r = weightedMedian(ads, "SELL", { TOP_N_ADS: 5 });
+  // First 5: 630, 631, 632, 633, 634 → median = 632
+  assert(r.topNMedian === 632,             "weightedMedian result includes topNMedian=632");
+  assert(r.topNCount  === 5,               "weightedMedian result includes topNCount=5");
+}
+
+// ─── 8. Rate encoding (rateToWei / weiToRate) ─────────────────────────────────
+console.log("\n8. Rate encoding — rateToWei / weiToRate roundtrip");
 
 {
   const rate = 620.5;

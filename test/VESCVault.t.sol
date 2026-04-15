@@ -221,12 +221,47 @@ contract VESCVaultTest is Test {
         _mintUSDC(alice, usdcIn);
         _approveAndMint(alice, usdcIn);
 
-        // Drop buyRate 19%: requiredReserves = totalSupply * 1e6 / newBuyRate rises
+        // With MAX_RATE_CHANGE_BPS = 500 (5%), a 19% drop is blocked by RateChangeTooLarge
+        // before the invariant check — the tighter guard fires first.
         uint256 newSell = SELL_RATE * 81 / 100;
         uint256 newBuy  = BUY_RATE  * 81 / 100;
         vm.warp(block.timestamp + vault.MIN_RATE_UPDATE_INTERVAL());
-        vm.expectRevert(VESCVault.InvariantViolation.selector);
+        vm.expectRevert(VESCVault.RateChangeTooLarge.selector);
         vault.setRates(newBuy, newSell);
+    }
+
+    function test_SetRates_SmallDecrease_WithInsufficientReserves_Reverts() public {
+        // To hit InvariantViolation within the 5% rate-change cap we need a vault where
+        // mint used sellRate ≈ buyRate (tight spread). Use a near-parity setup:
+        // buyRate = 630e18, sellRate = 629e18 (0.16% spread).
+        // After mint(100e6): VESC supply = 100e6 * 629e18 / 1e6 = 629e20
+        // requiredReserves = 629e20 * 1e6 / newBuyRate
+        // Invariant breaks when newBuyRate < 629e18 (i.e. buyRate drops ~0.16%)
+        // A 4% drop (newBuyRate = 604.8e18) is well past the break point.
+        uint256 tightBuy  = 630e18;
+        uint256 tightSell = 629e18;
+
+        VESCToken token2 = new VESCToken();
+        VESCVault impl2  = new VESCVault();
+        VESCVault vault2 = VESCVault(address(new ERC1967Proxy(
+            address(impl2),
+            abi.encodeCall(VESCVault.initialize, (address(usdc), address(token2), tightBuy, tightSell))
+        )));
+        token2.setVault(address(vault2));
+
+        uint256 usdcIn = 100e6;
+        _mintUSDC(alice, usdcIn);
+        vm.startPrank(alice);
+        usdc.approve(address(vault2), usdcIn);
+        vault2.mint(usdcIn, 0);
+        vm.stopPrank();
+
+        // 4% drop: newBuyRate = 604.8e18, well below the 629e18 break point
+        uint256 newBuy  = tightBuy  * 96 / 100;
+        uint256 newSell = tightSell * 96 / 100;
+        vm.warp(block.timestamp + vault2.MIN_RATE_UPDATE_INTERVAL());
+        vm.expectRevert(VESCVault.InvariantViolation.selector);
+        vault2.setRates(newBuy, newSell);
     }
 
     // ── Slippage ─────────────────────────────────────────────────────────────

@@ -9,6 +9,12 @@
  * Rate mapping (advertiser perspective):
  *   SELL ads (merchants selling USDT) → high VES/USDT price → vault buyRate  (mint)
  *   BUY  ads (merchants buying USDT)  → low  VES/USDT price → vault sellRate (burn)
+ *
+ * Promoted ad filtering:
+ *   Ads with privilegeType !== null are paid/promoted placements injected at the top
+ *   of the book regardless of price. They are excluded before any price calculation.
+ *   After exclusion, the simple median of the first TOP_N_ADS organic ads is computed
+ *   as a reference price alongside the liquidity-weighted median.
  */
 
 const https = require("https");
@@ -16,15 +22,56 @@ const https = require("https");
 const P2P_URL = "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search";
 
 const DEFAULTS = {
-  ASSET:         "USDT",
-  FIAT:          "VES",
-  ROWS:          20,
-  MIN_ADS:       10,
-  TIMEOUT_MS:    8000,
-  OUTLIER_PCT:   15,   // drop ads > 15% from simple median
-  CROSS_VAL_PCT: 5,    // abort if weighted vs simple median diverge > 5%
-  MAX_WEIGHT_PCT: 30,  // cap any single ad's share of total volume at 30%
+  ASSET:          "USDT",
+  FIAT:           "VES",
+  ROWS:           20,
+  MIN_ADS:        15,   // was 10 — require more ads for a reliable median
+  TIMEOUT_MS:     8000,
+  OUTLIER_PCT:    15,   // drop ads > 15% from simple median
+  CROSS_VAL_PCT:  3,    // was 5 — detect manipulation earlier
+  MAX_WEIGHT_PCT: 30,   // cap any single ad's share of total volume at 30%
+  TOP_N_ADS:      5,    // compute simple median of the first N organic (non-promoted) ads
 };
+
+// ─── Promoted-ad filter ───────────────────────────────────────────────────────
+
+/**
+ * Returns true if an ad is a paid/promoted placement.
+ * Binance signals this with privilegeType !== null (observed value: 8, desc: "Promoted Ad").
+ * These are injected at the top of the book regardless of price and must be excluded
+ * before any price calculation to prevent artificial rate distortion.
+ *
+ * @param {object} ad  Raw ad object from Binance response (top-level, not ad.adv)
+ * @returns {boolean}
+ */
+function isPromotedAd(ad) {
+  return ad.privilegeType !== null && ad.privilegeType !== undefined;
+}
+
+/**
+ * Compute simple median of the first N organic ads by list position (as returned by Binance).
+ * These are the ads a real user would see first after promoted entries are removed.
+ *
+ * @param {object[]} organicAds  Already-filtered ads (promoted removed), raw Binance format
+ * @param {number}   n           How many top ads to include
+ * @returns {{ topNMedian: number, topNPrices: number[], topNCount: number }}
+ */
+function topNSimpleMedian(organicAds, n) {
+  const topAds = organicAds.slice(0, n);
+  const prices = topAds
+    .map(ad => parseFloat(ad.adv?.price))
+    .filter(p => isFinite(p) && p > 0);
+
+  if (prices.length === 0) return { topNMedian: null, topNPrices: [], topNCount: 0 };
+
+  const sorted = [...prices].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+
+  return { topNMedian: median, topNPrices: prices, topNCount: prices.length };
+}
 
 // ─── HTTP helper ──────────────────────────────────────────────────────────────
 
@@ -70,7 +117,9 @@ function httpPost(url, payload, timeoutMs) {
  * Compute the liquidity-weighted median price from a list of ads.
  *
  * Algorithm:
- *  1. Parse price + tradableQuantity from each ad
+ *  0. Remove promoted ads (privilegeType !== null) — these are paid placements
+ *     injected at the top of the book regardless of price
+ *  1. Parse price + tradableQuantity from each organic ad
  *  2. Compute simple median of all prices
  *  3. Drop outliers: ads priced > OUTLIER_PCT% from simple median
  *  4. Require >= MIN_ADS valid ads after filtering
@@ -78,20 +127,27 @@ function httpPost(url, payload, timeoutMs) {
  *  6. Walk ads accumulating tradableQuantity until >= 50% of total
  *  7. That ad's price is the weighted median
  *  8. Cross-validate: abort if weighted and simple median diverge > CROSS_VAL_PCT%
+ *  9. Compute simple median of first TOP_N_ADS from the outlier-cleaned sorted list
+ *     (applied AFTER outlier removal so junk ads like 1000/850 VES are excluded)
  *
- * @param {object[]} ads         Raw ads from Binance response
+ * @param {object[]} ads         Raw ads from Binance response (top-level objects with privilegeType)
  * @param {"SELL"|"BUY"} side   Which side — affects sort order
  * @param {object} cfg           Config overrides
- * @returns {{ rate: number, adsUsed: number, simpleMedian: number, weightedMedian: number }}
+ * @returns {{ rate: number, adsUsed: number, promotedAdsRemoved: number, simpleMedian: number, weightedMedian: number, topNMedian: number|null, topNPrices: number[] }}
  */
 function weightedMedian(ads, side, cfg = {}) {
   const MIN_ADS       = cfg.MIN_ADS       ?? DEFAULTS.MIN_ADS;
   const OUTLIER_PCT   = cfg.OUTLIER_PCT   ?? DEFAULTS.OUTLIER_PCT;
   const CROSS_VAL     = cfg.CROSS_VAL_PCT ?? DEFAULTS.CROSS_VAL_PCT;
   const MAX_WEIGHT    = (cfg.MAX_WEIGHT_PCT ?? DEFAULTS.MAX_WEIGHT_PCT) / 100;
+  const TOP_N         = cfg.TOP_N_ADS     ?? DEFAULTS.TOP_N_ADS;
 
-  // Parse price and quantity — skip ads with invalid values
-  const parsed = ads
+  // Step 0 — remove promoted/paid ads
+  const promotedCount = ads.filter(isPromotedAd).length;
+  const organicAds    = ads.filter(ad => !isPromotedAd(ad));
+
+  // Step 1 — parse price and quantity from organic ads, skip invalid values
+  const parsed = organicAds
     .map(ad => ({
       price: parseFloat(ad.adv?.price),
       qty:   parseFloat(ad.adv?.tradableQuantity),
@@ -100,22 +156,29 @@ function weightedMedian(ads, side, cfg = {}) {
 
   if (parsed.length === 0) throw new Error(`No valid ads to compute median (side=${side})`);
 
-  // Simple median (on all parsed ads, before outlier removal)
+  // Step 2 — simple median of all organic prices (used for outlier threshold)
   const sortedPrices = [...parsed.map(a => a.price)].sort((a, b) => a - b);
   const mid = Math.floor(sortedPrices.length / 2);
   const simpleMedian = sortedPrices.length % 2 === 0
     ? (sortedPrices[mid - 1] + sortedPrices[mid]) / 2
     : sortedPrices[mid];
 
-  // Drop outliers
+  // Step 3 — drop outliers (ads > OUTLIER_PCT% away from simple median)
   const filtered = parsed.filter(a => Math.abs(a.price - simpleMedian) / simpleMedian * 100 <= OUTLIER_PCT);
   if (filtered.length < MIN_ADS) {
     throw new Error(`Only ${filtered.length} valid ads after outlier filter (need >= ${MIN_ADS}, side=${side})`);
   }
 
-  // Sort: SELL side ascending (cheapest first = most competitive sellers),
-  //       BUY  side descending (highest first = most competitive buyers)
+  // Step 4 — sort: SELL ascending (cheapest first), BUY descending (highest first)
   const sorted = [...filtered].sort((a, b) => side === "SELL" ? a.price - b.price : b.price - a.price);
+
+  // Step 5 — top-N simple median from the outlier-cleaned sorted list.
+  // Using price-sorted filtered ads (not raw positions) ensures junk ads like
+  // 1000/850 VES outliers are excluded before the top-N window is taken.
+  const topN = topNSimpleMedian(
+    sorted.map(a => ({ adv: { price: String(a.price), tradableQuantity: String(a.qty) } })),
+    TOP_N,
+  );
 
   // Cap each ad's volume contribution so no single merchant dominates the median.
   // Without this, a promoted ad with 1800 USDT crosses the 50% threshold alone
@@ -145,10 +208,14 @@ function weightedMedian(ads, side, cfg = {}) {
   }
 
   return {
-    rate:           weightedMedianPrice,
-    adsUsed:        filtered.length,
+    rate:                weightedMedianPrice,
+    adsUsed:             filtered.length,
+    promotedAdsRemoved:  promotedCount,
     simpleMedian,
-    weightedMedian: weightedMedianPrice,
+    weightedMedian:      weightedMedianPrice,
+    topNMedian:          topN.topNMedian,
+    topNPrices:          topN.topNPrices,
+    topNCount:           topN.topNCount,
   };
 }
 
@@ -213,15 +280,21 @@ async function fetchBinanceRates(cfg = {}) {
   const inverted = buySideResult.rate > sellSideResult.rate;
 
   return {
-    buy:          buyRate,
-    sell:         sellRate,
-    buyAdsUsed:   sellSideResult.adsUsed,
-    sellAdsUsed:  buySideResult.adsUsed,
-    buySimple:    sellSideResult.simpleMedian,
-    sellSimple:   buySideResult.simpleMedian,
+    buy:                    buyRate,
+    sell:                   sellRate,
+    buyAdsUsed:             sellSideResult.adsUsed,
+    sellAdsUsed:            buySideResult.adsUsed,
+    buySimple:              sellSideResult.simpleMedian,
+    sellSimple:             buySideResult.simpleMedian,
+    buyPromotedRemoved:     sellSideResult.promotedAdsRemoved,
+    sellPromotedRemoved:    buySideResult.promotedAdsRemoved,
+    buyTopNMedian:          sellSideResult.topNMedian,
+    sellTopNMedian:         buySideResult.topNMedian,
+    buyTopNPrices:          sellSideResult.topNPrices,
+    sellTopNPrices:         buySideResult.topNPrices,
     inverted,
-    fetchedAt:    new Date().toISOString(),
+    fetchedAt:              new Date().toISOString(),
   };
 }
 
-module.exports = { fetchBinanceRates, fetchP2PSide, weightedMedian };
+module.exports = { fetchBinanceRates, fetchP2PSide, weightedMedian, topNSimpleMedian, isPromotedAd };

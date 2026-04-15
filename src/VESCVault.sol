@@ -31,9 +31,9 @@ contract VESCVault is
 
     uint256 public constant FEE_BPS = 25;   // 0.25%
     uint256 public constant BPS     = 10_000;
-    uint256 public constant MAX_RATE_CHANGE_BPS      = 2_000;      // 20% max per update
+    uint256 public constant MAX_RATE_CHANGE_BPS      = 500;        // 5% max per update (was 20%)
     uint256 public constant MAX_RATE_STALENESS        = 30 minutes;
-    uint256 public constant MIN_RATE_UPDATE_INTERVAL  = 10 minutes;
+    uint256 public constant MIN_RATE_UPDATE_INTERVAL  = 5 minutes;  // was 10 minutes
 
     uint256 private constant USDC_SCALE = 1e6;
 

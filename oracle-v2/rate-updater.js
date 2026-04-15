@@ -38,16 +38,16 @@ const CONFIG = {
   KEYSTORE_PASSWORD:  process.env.KEYSTORE_PASSWORD,
 
   // Binance P2P
-  ROWS:              parseInt(process.env.BINANCE_ROWS    || "20"),
-  MIN_ADS:           parseInt(process.env.BINANCE_MIN_ADS || "10"),
+  ROWS:              parseInt(process.env.BINANCE_ROWS    || "20"),   // Binance max is 20 rows per request
+  MIN_ADS:           parseInt(process.env.BINANCE_MIN_ADS || "15"),   // was 10 — matches binance.js default
   TIMEOUT_MS:        parseInt(process.env.BINANCE_TIMEOUT_MS || "8000"),
 
   // Oracle behaviour
   INTERVAL_MINUTES:  parseInt(process.env.INTERVAL_MINUTES  || "15"),
-  MAX_CHANGE_PCT:    parseFloat(process.env.MAX_CHANGE_PCT   || "20"),
+  MAX_CHANGE_PCT:    parseFloat(process.env.MAX_CHANGE_PCT   || "8"),      // was 20 — max realistic move in 15 min
   MIN_CHANGE_PCT:    parseFloat(process.env.MIN_CHANGE_PCT   || "0.1"),
   MAX_STALENESS_SEC: parseInt(process.env.MAX_STALENESS_SEC  || "1500"),   // 25 min
-  MAX_SPREAD_PCT:    parseFloat(process.env.MAX_SPREAD_PCT   || "8"),      // normal→mid-collapse threshold
+  MAX_SPREAD_PCT:    parseFloat(process.env.MAX_SPREAD_PCT   || "4"),      // was 8 — enter mid-collapse earlier
 
   // USDT/USDC circuit breaker
   SPREAD_HALT_BPS:   parseFloat(process.env.SPREAD_HALT_BPS || "100"),    // halt if > 1%
@@ -140,16 +140,26 @@ async function updateRates() {
       MIN_ADS:    CONFIG.MIN_ADS,
       TIMEOUT_MS: CONFIG.TIMEOUT_MS,
     });
+    if (p2pRates.buyPromotedRemoved > 0 || p2pRates.sellPromotedRemoved > 0) {
+      log("WARN", "Promoted ads removed from P2P book", {
+        buyPromoted:  p2pRates.buyPromotedRemoved,
+        sellPromoted: p2pRates.sellPromotedRemoved,
+      });
+    }
     if (p2pRates.inverted) {
       log("WARN", "P2P order book inverted (BUY bids > SELL asks) — using higher as buyRate", {
         buy: p2pRates.buy.toFixed(4), sell: p2pRates.sell.toFixed(4),
       });
     } else {
       log("INFO", "Binance P2P rates fetched", {
-        buy:     p2pRates.buy.toFixed(4),
-        sell:    p2pRates.sell.toFixed(4),
-        buyAds:  p2pRates.buyAdsUsed,
-        sellAds: p2pRates.sellAdsUsed,
+        buy:          p2pRates.buy.toFixed(4),
+        sell:         p2pRates.sell.toFixed(4),
+        buyAds:       p2pRates.buyAdsUsed,
+        sellAds:      p2pRates.sellAdsUsed,
+        buyTopN:      p2pRates.buyTopNMedian?.toFixed(4) ?? "n/a",
+        sellTopN:     p2pRates.sellTopNMedian?.toFixed(4) ?? "n/a",
+        buyTopNPx:    p2pRates.buyTopNPrices,
+        sellTopNPx:   p2pRates.sellTopNPrices,
       });
     }
     server.setRates(p2pRates);
