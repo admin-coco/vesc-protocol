@@ -10,6 +10,7 @@ Commands:
   /pool    - live Uniswap v3 pool status + rebalance guidance
   /fees    - uncollected LP fees earned on the Uniswap v3 position
   /chart   - buy/sell rate chart for last 24h (Caracas time)
+  /book    - Binance P2P order book used to compute last oracle price
   /stop    - stop your active alert
 """
 
@@ -18,6 +19,8 @@ import os
 import logging
 import math
 import zoneinfo
+import urllib.request
+import json
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 
@@ -39,6 +42,7 @@ log = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 RPC_URL        = os.environ.get("RPC_URL", "https://mainnet.base.org")
+ORACLE_URL     = os.environ.get("ORACLE_URL", "").rstrip("/")   # e.g. https://vesc-oracle.up.railway.app
 VAULT_ADDRESS  = "0x50f50cf026837ab49f337927d2b3269a7dedbc60"  # ERC1967Proxy
 
 # Uniswap v3 pool position (VESC/USDC, 0.05% fee)
@@ -656,6 +660,113 @@ async def cmd_chart(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                             parse_mode="Markdown")
 
 
+# ── /book ─────────────────────────────────────────────────────────────────
+
+def fetch_oracle_book() -> dict:
+    """Fetch the latest P2P order book snapshot from the oracle HTTP server."""
+    if not ORACLE_URL:
+        raise RuntimeError("ORACLE_URL env var not set")
+    req = urllib.request.Request(
+        f"{ORACLE_URL}/book",
+        headers={"User-Agent": "vesc-bot/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        return json.loads(resp.read())
+
+
+def _fmt_price_list(prices: list, label: str) -> str:
+    if not prices:
+        return f"  _{label}: no data_"
+    rows = "\n".join(f"  `{p:>10,.2f}` VES/USDT" for p in prices)
+    return f"  {label}\n{rows}"
+
+
+async def cmd_book(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not ORACLE_URL:
+        await update.message.reply_text(
+            "❌ `ORACLE_URL` env var not configured on this bot.",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        book = fetch_oracle_book()
+    except Exception as e:
+        log.error("book fetch error: %s", e)
+        await update.message.reply_text(
+            f"❌ Could not reach oracle: `{type(e).__name__}: {str(e)[:100]}`",
+            parse_mode="Markdown",
+        )
+        return
+
+    buy_prices  = book.get("buyPrices",  [])   # SELL-side ads  → vault buyRate  (mint)
+    sell_prices = book.get("sellPrices", [])   # BUY-side ads   → vault sellRate (burn)
+    raw_buy     = book.get("rawBuy")
+    raw_sell    = book.get("rawSell")
+    eff_buy     = book.get("effectiveBuy")
+    eff_sell    = book.get("effectiveSell")
+    spread_pct  = book.get("marketSpreadPct", 0.0)
+    spread_mode = book.get("spreadMode", "normal")
+    mid         = book.get("mid")
+    buy_ads     = book.get("buyAdsUsed", "?")
+    sell_ads    = book.get("sellAdsUsed", "?")
+    inverted    = book.get("inverted", False)
+    fetched_at  = book.get("fetchedAt", "?")
+
+    # Format fetched_at to short UTC time
+    try:
+        dt = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+        fetched_str = dt.strftime("%Y-%m-%d %H:%M UTC")
+    except Exception:
+        fetched_str = fetched_at
+
+    # Spread mode label
+    mode_labels = {
+        "normal":       "✅ Normal",
+        "mid_collapse": "⚠️ Mid-collapse (spread >{:.0f}%)".format(spread_pct),
+        "market_chaos": "🚨 Market chaos — oracle halted",
+    }
+    mode_str = mode_labels.get(spread_mode, spread_mode)
+
+    # Inversion warning
+    inv_warn = "\n⚠️ _Order book inverted (BUY bids > SELL asks)_" if inverted else ""
+
+    # Computed / effective rates
+    if eff_buy is not None and eff_sell is not None:
+        if spread_mode == "mid_collapse":
+            rates_str = (
+                f"Computed (raw):   buy `{raw_buy:,.2f}` · sell `{raw_sell:,.2f}` VES/USDT\n"
+                f"Mid (published):  `{mid:,.2f}` VES/USDT (both rates collapsed)\n"
+                f"On-chain spread:  `0.00%`"
+            )
+        else:
+            on_chain_spread = (eff_buy - eff_sell) / eff_sell * 100 if eff_sell else 0
+            rates_str = (
+                f"Buy  (mint):  `{eff_buy:,.2f}` VES/USDT\n"
+                f"Sell (burn):  `{eff_sell:,.2f}` VES/USDT\n"
+                f"Spread:       `{on_chain_spread:.2f}%`"
+            )
+    else:
+        rates_str = f"Raw buy: `{raw_buy:,.2f}` · Raw sell: `{raw_sell:,.2f}` VES/USDT\n_Rates not pushed (oracle halted)_"
+
+    buy_block  = _fmt_price_list(buy_prices,  f"Top {len(buy_prices)} SELL-side ads  ({buy_ads} total) → buyRate")
+    sell_block = _fmt_price_list(sell_prices, f"Top {len(sell_prices)} BUY-side ads   ({sell_ads} total) → sellRate")
+
+    text = (
+        f"📖 *Oracle Order Book Snapshot*\n"
+        f"🕐 {fetched_str}{inv_warn}\n\n"
+        f"*P2P Market Spread:* `{spread_pct:.2f}%` — {mode_str}\n\n"
+        f"*─ SELL-side (merchants selling USDT → buyRate / mint) ─*\n"
+        f"{buy_block}\n\n"
+        f"*─ BUY-side (merchants buying USDT → sellRate / burn) ─*\n"
+        f"{sell_block}\n\n"
+        f"*Computed Rates (published on-chain):*\n"
+        f"{rates_str}"
+    )
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 # ── /stop ─────────────────────────────────────────────────────────────────
 
 async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -686,6 +797,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "  /pool — live Uniswap v3 pool status + rebalance guidance\n"
         "  /fees — uncollected LP fees on position #4876709\n"
         "  /chart — buy/sell rate chart last 24h (or /chart 48 for 48h)\n"
+        "  /book — Binance P2P order book used to compute last oracle price\n"
         "  /alert 2.5 — notify when rate moves ±2.5%\n"
         "  /schedule 60 — post rate every 60 min\n"
         "  /stop — cancel all alerts & schedules",
@@ -707,6 +819,7 @@ def main():
     app.add_handler(CommandHandler("pool",     cmd_pool))
     app.add_handler(CommandHandler("fees",     cmd_fees))
     app.add_handler(CommandHandler("chart",    cmd_chart))
+    app.add_handler(CommandHandler("book",     cmd_book))
     app.add_handler(CommandHandler("stop",     cmd_stop))
 
     log.info("Bot starting...")

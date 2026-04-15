@@ -195,6 +195,14 @@ async function updateRates() {
     log("WARN", `P2P spread ${marketSpreadPct.toFixed(2)}% >= ${CHAOS_SPREAD_PCT}% chaos threshold — halting`, {
       buy: apiBuy, sell: apiSell,
     });
+    server.setBook({
+      buyPrices: p2pRates.buyTopNPrices ?? [], sellPrices: p2pRates.sellTopNPrices ?? [],
+      buyAdsUsed: p2pRates.buyAdsUsed, sellAdsUsed: p2pRates.sellAdsUsed,
+      buyTopNMedian: p2pRates.buyTopNMedian, sellTopNMedian: p2pRates.sellTopNMedian,
+      rawBuy: apiBuy, rawSell: apiSell, marketSpreadPct, mid,
+      spreadMode: "market_chaos", effectiveBuy: null, effectiveSell: null,
+      inverted: p2pRates.inverted ?? false, fetchedAt: p2pRates.fetchedAt,
+    });
     return { success: false, reason: "market_chaos", marketSpreadPct };
   } else if (marketSpreadPct >= NORMAL_SPREAD_PCT) {
     // Collapse to mid-price: keeps vault alive and unstale without publishing a distorted spread
@@ -205,6 +213,25 @@ async function updateRates() {
       rawBuy: apiBuy, rawSell: apiSell, mid,
     });
   }
+
+  // Publish order book snapshot for /book endpoint
+  server.setBook({
+    buyPrices:      p2pRates.buyTopNPrices  ?? [],   // SELL-side ads → vault buyRate
+    sellPrices:     p2pRates.sellTopNPrices ?? [],   // BUY-side ads  → vault sellRate
+    buyAdsUsed:     p2pRates.buyAdsUsed,
+    sellAdsUsed:    p2pRates.sellAdsUsed,
+    buyTopNMedian:  p2pRates.buyTopNMedian,
+    sellTopNMedian: p2pRates.sellTopNMedian,
+    rawBuy:         apiBuy,
+    rawSell:        apiSell,
+    marketSpreadPct,
+    mid,
+    spreadMode,
+    effectiveBuy,
+    effectiveSell,
+    inverted:       p2pRates.inverted ?? false,
+    fetchedAt:      p2pRates.fetchedAt,
+  });
 
   // 5. Read on-chain state
   let onChain;

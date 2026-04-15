@@ -12,9 +12,11 @@ const http = require("http");
 
 let _rates  = null;   // { buy, sell, buyAdsUsed, sellAdsUsed, fetchedAt }
 let _status = null;   // { success, reason, txHash, spreadBps, consecutiveFailures, cycleAt }
+let _book   = null;   // { buyPrices, sellPrices, computedBuy, computedSell, rawBuy, rawSell, spreadPct, spreadMode, mid, fetchedAt }
 
 function setRates(r)  { _rates  = r; }
 function setStatus(s) { _status = s; }
+function setBook(b)   { _book   = b; }
 
 function start(port) {
   const server = http.createServer((req, res) => {
@@ -43,6 +45,17 @@ function start(port) {
       return;
     }
 
+    if (req.url === "/book") {
+      if (!_book) {
+        res.writeHead(503, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "book not yet fetched" }));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(_book));
+      return;
+    }
+
     res.writeHead(404).end();
   });
 
@@ -53,4 +66,4 @@ function start(port) {
   return server;
 }
 
-module.exports = { start, setRates, setStatus };
+module.exports = { start, setRates, setStatus, setBook };
