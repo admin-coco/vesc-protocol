@@ -72,7 +72,10 @@ function changePct(newVal, oldVal) {
 
 async function postBookLog(book) {
   const token  = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.BOOK_LOG_CHAT_ID || "404094584";
+  // Support multiple chat IDs via comma-separated BOOK_LOG_CHAT_IDS, fallback to single BOOK_LOG_CHAT_ID
+  const chatIds = process.env.BOOK_LOG_CHAT_IDS
+    ? process.env.BOOK_LOG_CHAT_IDS.split(",").map(s => s.trim()).filter(Boolean)
+    : [process.env.BOOK_LOG_CHAT_ID || "404094584"];
   if (!token) return;
 
   const modeEmoji = { normal: "✅", mid_collapse: "⚠️", market_chaos: "🚨" }[book.spreadMode] ?? "·";
@@ -97,14 +100,16 @@ async function postBookLog(book) {
     `\`${sellLine}\``
   );
 
-  try {
-    await httpPost(
-      `https://api.telegram.org/bot${token}/sendMessage`,
-      { chat_id: chatId, text, parse_mode: "Markdown" },
-      5000,
-    );
-  } catch (e) {
-    log("WARN", `Book log Telegram post failed (non-fatal): ${e.message}`);
+  for (const chatId of chatIds) {
+    try {
+      await httpPost(
+        `https://api.telegram.org/bot${token}/sendMessage`,
+        { chat_id: chatId, text, parse_mode: "Markdown" },
+        5000,
+      );
+    } catch (e) {
+      log("WARN", `Book log Telegram post failed for chat ${chatId} (non-fatal): ${e.message}`);
+    }
   }
 }
 
