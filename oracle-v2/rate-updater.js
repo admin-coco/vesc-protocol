@@ -102,11 +102,20 @@ async function postBookLog(book) {
 
   for (const chatId of chatIds) {
     try {
-      await httpPost(
+      const res = await httpPost(
         `https://api.telegram.org/bot${token}/sendMessage`,
         { chat_id: chatId, text, parse_mode: "Markdown" },
         5000,
       );
+      if (res.status !== 200) {
+        const parsed = JSON.parse(res.data);
+        const migrateId = parsed?.parameters?.migrate_to_chat_id;
+        if (migrateId) {
+          log("WARN", `Chat ${chatId} migrated to supergroup — update BOOK_LOG_CHAT_IDS to ${migrateId}`);
+        } else {
+          log("WARN", `Book log Telegram post failed for chat ${chatId}: ${res.status} ${res.data}`);
+        }
+      }
     } catch (e) {
       log("WARN", `Book log Telegram post failed for chat ${chatId} (non-fatal): ${e.message}`);
     }
