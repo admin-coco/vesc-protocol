@@ -68,6 +68,46 @@ function changePct(newVal, oldVal) {
   return Math.abs((newVal - oldVal) / oldVal) * 100;
 }
 
+// ─── Telegram book log ────────────────────────────────────────────────────────
+
+async function postBookLog(book) {
+  const token  = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.BOOK_LOG_CHAT_ID || "404094584";
+  if (!token) return;
+
+  const modeEmoji = { normal: "✅", mid_collapse: "⚠️", market_chaos: "🚨" }[book.spreadMode] ?? "·";
+  const ts = new Date(book.fetchedAt).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+
+  const buyLine  = (book.buyPrices  ?? []).map(p => p.toFixed(2)).join(", ") || "n/a";
+  const sellLine = (book.sellPrices ?? []).map(p => p.toFixed(2)).join(", ") || "n/a";
+
+  const effBuy  = book.effectiveBuy  != null ? book.effectiveBuy.toFixed(2)  : "halted";
+  const effSell = book.effectiveSell != null ? book.effectiveSell.toFixed(2) : "halted";
+  const spreadStr = book.marketSpreadPct != null ? book.marketSpreadPct.toFixed(2) + "%" : "?";
+  const invStr  = book.inverted ? " ⚠️inv" : "";
+
+  const text = (
+    `📒 *Oracle Book Log*\n` +
+    `\`${ts}\`\n\n` +
+    `${modeEmoji} Spread: \`${spreadStr}\`${invStr} — _${book.spreadMode}_\n` +
+    `Published: buy \`${effBuy}\` · sell \`${effSell}\` VES/USDT\n\n` +
+    `*SELL-side* (→ buyRate/mint) — ${book.buyAdsUsed} ads\n` +
+    `\`${buyLine}\`\n\n` +
+    `*BUY-side* (→ sellRate/burn) — ${book.sellAdsUsed} ads\n` +
+    `\`${sellLine}\``
+  );
+
+  try {
+    await httpPost(
+      `https://api.telegram.org/bot${token}/sendMessage`,
+      { chat_id: chatId, text, parse_mode: "Markdown" },
+      5000,
+    );
+  } catch (e) {
+    log("WARN", `Book log Telegram post failed (non-fatal): ${e.message}`);
+  }
+}
+
 // ─── USDT/USDC spread check (Coinbase, no geo-block) ─────────────────────────
 
 function httpGet(url) {
@@ -88,6 +128,27 @@ function httpGet(url) {
     });
     req.on("error", reject);
     req.setTimeout(8000, () => { req.destroy(); reject(new Error("timeout")); });
+    req.end();
+  });
+}
+
+function httpPost(url, payload, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const u    = new URL(url);
+    const req  = https.request({
+      hostname: u.hostname,
+      path:     u.pathname + u.search,
+      method:   "POST",
+      headers:  { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+    }, (res) => {
+      let data = "";
+      res.on("data", d => data += d);
+      res.on("end", () => resolve({ status: res.statusCode, data }));
+    });
+    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error("timeout")); });
+    req.write(body);
     req.end();
   });
 }
@@ -195,14 +256,16 @@ async function updateRates() {
     log("WARN", `P2P spread ${marketSpreadPct.toFixed(2)}% >= ${CHAOS_SPREAD_PCT}% chaos threshold — halting`, {
       buy: apiBuy, sell: apiSell,
     });
-    server.setBook({
+    const chaosBook = {
       buyPrices: p2pRates.buyTopNPrices ?? [], sellPrices: p2pRates.sellTopNPrices ?? [],
       buyAdsUsed: p2pRates.buyAdsUsed, sellAdsUsed: p2pRates.sellAdsUsed,
       buyTopNMedian: p2pRates.buyTopNMedian, sellTopNMedian: p2pRates.sellTopNMedian,
       rawBuy: apiBuy, rawSell: apiSell, marketSpreadPct, mid,
       spreadMode: "market_chaos", effectiveBuy: null, effectiveSell: null,
       inverted: p2pRates.inverted ?? false, fetchedAt: p2pRates.fetchedAt,
-    });
+    };
+    server.setBook(chaosBook);
+    await postBookLog(chaosBook);
     return { success: false, reason: "market_chaos", marketSpreadPct };
   } else if (marketSpreadPct >= NORMAL_SPREAD_PCT) {
     // Collapse to mid-price: keeps vault alive and unstale without publishing a distorted spread
@@ -214,8 +277,8 @@ async function updateRates() {
     });
   }
 
-  // Publish order book snapshot for /book endpoint
-  server.setBook({
+  // Publish order book snapshot for /book endpoint and audit log
+  const bookSnapshot = {
     buyPrices:      p2pRates.buyTopNPrices  ?? [],   // SELL-side ads → vault buyRate
     sellPrices:     p2pRates.sellTopNPrices ?? [],   // BUY-side ads  → vault sellRate
     buyAdsUsed:     p2pRates.buyAdsUsed,
@@ -231,7 +294,9 @@ async function updateRates() {
     effectiveSell,
     inverted:       p2pRates.inverted ?? false,
     fetchedAt:      p2pRates.fetchedAt,
-  });
+  };
+  server.setBook(bookSnapshot);
+  await postBookLog(bookSnapshot);
 
   // 5. Read on-chain state
   let onChain;
