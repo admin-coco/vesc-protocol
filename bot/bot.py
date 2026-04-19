@@ -11,6 +11,7 @@ Commands:
   /fees    - uncollected LP fees earned on the Uniswap v3 position
   /chart   - buy/sell rate chart for last 24h (Caracas time)
   /book    - Binance P2P order book used to compute last oracle price
+  /mm      - market maker dashboard: arb gap, IL estimate, fee APR, action signal
   /stop    - stop your active alert
 """
 
@@ -767,6 +768,161 @@ async def cmd_book(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+# ── /mm — Market Maker Dashboard ──────────────────────────────────────────
+
+def _il_pct(price_ratio: float) -> float:
+    """Impermanent loss % for a price move of `price_ratio` (new/old) in a CPMM pool."""
+    if price_ratio <= 0:
+        return 0.0
+    il = 2 * math.sqrt(price_ratio) / (1 + price_ratio) - 1
+    return il * 100  # negative = loss
+
+
+def _fee_apr(daily_volume_usdc: float, pool_tvl_usdc: float, fee_pct: float = 0.0005) -> float:
+    """Estimate annualised fee APR given daily volume and TVL."""
+    if pool_tvl_usdc <= 0:
+        return 0.0
+    return daily_volume_usdc * fee_pct * 365 / pool_tvl_usdc * 100
+
+
+async def cmd_mm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /mm — market maker dashboard
+    Shows: vault rates, pool price, arb gap, IL estimate, fee APR, clear action signal.
+    Usage: /mm [pool_tvl_usdc] [daily_volume_usdc]
+    Example: /mm 10000 5000
+    """
+    # Optional args: TVL and daily volume for APR estimate
+    tvl_usdc    = 10_000.0
+    daily_vol   = 5_000.0
+    if ctx.args:
+        try:
+            tvl_usdc  = float(ctx.args[0])
+            if len(ctx.args) >= 2:
+                daily_vol = float(ctx.args[1])
+        except ValueError:
+            pass
+
+    # 1. Vault rates
+    try:
+        vault_buy, vault_sell = get_buy_sell_rates()
+    except Exception as e:
+        await update.message.reply_text(f"❌ Vault RPC error: {e}")
+        return
+
+    vault_buy_f  = float(vault_buy)   # VES per USDC — higher (burn rate)
+    vault_sell_f = float(vault_sell)  # VES per USDC — lower  (mint rate)
+    vault_mid    = (vault_buy_f + vault_sell_f) / 2
+
+    # Convert to USDC per VESC for pool comparison
+    # vault: 1 USDC = vault_sell VESC  →  1 VESC = 1/vault_sell USDC
+    vault_usdc_per_vesc_mint = 1 / vault_sell_f   # cost to mint 1 VESC via vault
+    vault_usdc_per_vesc_burn = 1 / vault_buy_f    # proceeds from burning 1 VESC via vault
+    vault_fee = 0.0025  # 0.25% burn fee
+
+    # 2. Pool state
+    try:
+        ps = get_pool_state()
+    except Exception as e:
+        await update.message.reply_text(f"❌ Pool RPC error: {e}")
+        return
+
+    pool_usdc_per_vesc = ps["price_current_usdc_per_vesc"]  # pool spot price
+    pool_vesc_per_usdc = 1 / pool_usdc_per_vesc if pool_usdc_per_vesc > 0 else 0
+    in_range           = ps["in_range"]
+    pct_to_lower       = ps["pct_to_lower"]
+    pct_to_upper       = ps["pct_to_upper"]
+
+    # 3. Arbitrage gap analysis
+    # Gap = how much % pool price deviates from vault mid
+    gap_pct = (pool_usdc_per_vesc - (1 / vault_mid)) / (1 / vault_mid) * 100
+
+    # Total cost to arb (vault fee + pool fee)
+    ARB_COST_PCT = 0.25 + 0.05  # vault burn fee + Uniswap pool fee
+
+    # Direction and profitability
+    if gap_pct > ARB_COST_PCT:
+        # Pool VESC price > vault → buy cheap on vault (mint), sell on pool
+        arb_direction = "MINT at vault → SELL on pool"
+        arb_profit_pct = gap_pct - ARB_COST_PCT
+        arb_signal = "🟢 ARB OPEN"
+    elif gap_pct < -ARB_COST_PCT:
+        # Pool VESC price < vault → buy cheap on pool, burn at vault
+        arb_direction = "BUY on pool → BURN at vault"
+        arb_profit_pct = abs(gap_pct) - ARB_COST_PCT
+        arb_signal = "🟢 ARB OPEN"
+    else:
+        arb_direction = "No profitable arb"
+        arb_profit_pct = 0.0
+        arb_signal = "⚪ NO ARB"
+
+    # Profit on $1000 trade
+    arb_profit_1k = arb_profit_pct / 100 * 1000
+
+    # 4. Impermanent loss estimate
+    # Compare current pool price vs vault mid (the "true" price)
+    price_ratio = pool_usdc_per_vesc / (1 / vault_mid) if vault_mid > 0 else 1.0
+    il = _il_pct(price_ratio)  # negative = loss vs holding
+
+    # IL at ±10% move (range boundary scenario)
+    il_at_10pct_up   = _il_pct(1.10)
+    il_at_10pct_down = _il_pct(0.90)
+
+    # 5. Fee APR estimate
+    apr = _fee_apr(daily_vol, tvl_usdc)
+
+    # 6. Range status
+    if not in_range:
+        range_status = "🔴 OUT OF RANGE — earning 0 fees, rebalance now"
+    elif pct_to_lower < 5 or pct_to_upper < 5:
+        range_status = f"⚠️ NEAR EDGE — {min(pct_to_lower, pct_to_upper):.1f}% to boundary"
+    else:
+        range_status = f"✅ IN RANGE — ↓{pct_to_lower:.1f}% · ↑{pct_to_upper:.1f}% to edges"
+
+    # 7. Net position score: simple heuristic
+    if not in_range:
+        action = "🔴 URGENT: Rebalance position — currently earning nothing"
+    elif arb_profit_pct > 0.5:
+        action = f"🟢 Execute arb: {arb_direction} ({arb_profit_pct:.2f}% profit on trade)"
+    elif abs(il) > 0.5:
+        action = f"⚠️ IL building ({il:.2f}%) — monitor, consider rebalance if >1%"
+    else:
+        action = "✅ Hold — collect fees, no action needed"
+
+    vault_spread_pct = (vault_buy_f - vault_sell_f) / vault_sell_f * 100
+
+    text = (
+        f"📊 *Market Maker Dashboard*\n"
+        f"─────────────────────────\n\n"
+        f"*Vault Rates (oracle)*\n"
+        f"  Mint rate:  `{vault_sell_f:,.2f}` VESC/USDC\n"
+        f"  Burn rate:  `{vault_buy_f:,.2f}` VESC/USDC\n"
+        f"  Vault spread: `{vault_spread_pct:.2f}%`\n\n"
+        f"*Pool Spot Price*\n"
+        f"  Pool:  `{pool_vesc_per_usdc:,.2f}` VESC/USDC\n"
+        f"  Vault mid: `{vault_mid:,.2f}` VESC/USDC\n"
+        f"  Gap: `{gap_pct:+.3f}%` vs vault mid\n\n"
+        f"*Arbitrage*\n"
+        f"  {arb_signal}: {arb_direction}\n"
+        f"  Cost to arb: `{ARB_COST_PCT:.2f}%` (vault fee + pool fee)\n"
+        f"  Net profit: `{arb_profit_pct:.3f}%` → `${arb_profit_1k:.2f}` per $1,000\n\n"
+        f"*Impermanent Loss (current)*\n"
+        f"  vs vault mid: `{il:.3f}%`\n"
+        f"  If price moves +10%: `{il_at_10pct_up:.2f}%` IL\n"
+        f"  If price moves −10%: `{il_at_10pct_down:.2f}%` IL\n\n"
+        f"*Fee APR Estimate*\n"
+        f"  TVL: `${tvl_usdc:,.0f}` · Daily vol: `${daily_vol:,.0f}`\n"
+        f"  Est. APR: `{apr:.1f}%` → `${tvl_usdc * apr / 100 / 12:,.0f}/month`\n"
+        f"  _(use `/mm 10000 8000` to update TVL/volume)_\n\n"
+        f"*LP Range*\n"
+        f"  {range_status}\n\n"
+        f"*⚡ Action*\n"
+        f"  {action}"
+    )
+
+    await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
+
+
 # ── /stop ─────────────────────────────────────────────────────────────────
 
 async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -798,6 +954,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "  /fees — uncollected LP fees on position #4876709\n"
         "  /chart — buy/sell rate chart last 24h (or /chart 48 for 48h)\n"
         "  /book — Binance P2P order book used to compute last oracle price\n"
+        "  /mm — market maker dashboard: arb gap, IL, fee APR, action signal\n"
         "  /alert 2.5 — notify when rate moves ±2.5%\n"
         "  /schedule 60 — post rate every 60 min\n"
         "  /stop — cancel all alerts & schedules",
@@ -820,6 +977,7 @@ def main():
     app.add_handler(CommandHandler("fees",     cmd_fees))
     app.add_handler(CommandHandler("chart",    cmd_chart))
     app.add_handler(CommandHandler("book",     cmd_book))
+    app.add_handler(CommandHandler("mm",       cmd_mm))
     app.add_handler(CommandHandler("stop",     cmd_stop))
 
     log.info("Bot starting...")
