@@ -111,6 +111,16 @@ async function hasPendingTx(signer) {
 }
 
 /**
+ * Fetch current gas price with a multiplier buffer to avoid "replacement fee too low".
+ * Base gas can spike — 1.5x ensures the tx lands without overpaying significantly.
+ */
+async function getGasPrice(provider, multiplier = 1.5) {
+  const feeData  = await provider.getFeeData();
+  const base     = feeData.gasPrice ?? feeData.maxFeePerGas ?? ethers.parseUnits("0.01", "gwei");
+  return (base * BigInt(Math.round(multiplier * 100))) / 100n;
+}
+
+/**
  * Push both rates on-chain via setRates().
  * Returns the transaction receipt.
  */
@@ -118,8 +128,9 @@ async function pushRates(signer, config, buyRate, sellRate) {
   if (await hasPendingTx(signer)) {
     throw new Error("Pending transaction in mempool — skipping to avoid nonce gap");
   }
-  const vault = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, signer);
-  const tx    = await vault.setRates(rateToWei(buyRate), rateToWei(sellRate));
+  const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, signer);
+  const gasPrice = await getGasPrice(signer.provider);
+  const tx       = await vault.setRates(rateToWei(buyRate), rateToWei(sellRate), { gasPrice });
   return tx.wait();
 }
 
@@ -128,8 +139,9 @@ async function pushRates(signer, config, buyRate, sellRate) {
  * Non-fatal — caller should log and continue on failure.
  */
 async function recordSample(signer, config, buyRate, sellRate) {
-  const vault = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, signer);
-  const tx    = await vault.recordSample(rateToWei(buyRate), rateToWei(sellRate));
+  const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, signer);
+  const gasPrice = await getGasPrice(signer.provider);
+  const tx       = await vault.recordSample(rateToWei(buyRate), rateToWei(sellRate), { gasPrice });
   return tx.wait();
 }
 
