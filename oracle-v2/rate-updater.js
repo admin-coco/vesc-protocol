@@ -79,6 +79,19 @@ async function postBookLog(book) {
     : [process.env.BOOK_LOG_CHAT_ID || "404094584"];
   if (!token) return;
 
+  // Allow caller to override the full message text (used for gas alerts etc.)
+  if (book._override_text) {
+    for (const chatId of chatIds) {
+      try {
+        await httpPost(`https://api.telegram.org/bot${token}/sendMessage`,
+          { chat_id: chatId, text: book._override_text, parse_mode: "Markdown" }, 5000);
+      } catch (e) {
+        log("WARN", `Override Telegram post failed for ${chatId}: ${e.message}`);
+      }
+    }
+    return;
+  }
+
   const modeEmoji = { normal: "✅", mid_collapse: "⚠️", market_chaos: "🚨" }[book.spreadMode] ?? "·";
   const ts = new Date(book.fetchedAt).toISOString().replace("T", " ").slice(0, 16) + " UTC";
 
@@ -362,6 +375,30 @@ async function updateRates() {
   } catch (e) {
     log("ERROR", `Failed to build signer: ${e.message}`);
     return { success: false, reason: "signer_error", error: e.message };
+  }
+
+  // 6b. Gas balance check — warn before we run dry
+  try {
+    const balWei  = await signer.provider.getBalance(signer.address);
+    const balEth  = Number(balWei) / 1e18;
+    const WARN     = 0.002;   // ~1000 pushes remaining
+    const CRITICAL = 0.0005;  // ~125 pushes remaining
+    if (balEth < CRITICAL) {
+      log("ERROR", `Oracle wallet CRITICAL — almost no gas left`, { address: signer.address, balEth: balEth.toFixed(8) });
+      await postBookLog({
+        spreadMode: "market_chaos",
+        buyPrices: [], sellPrices: [], buyAdsUsed: 0, sellAdsUsed: 0,
+        effectiveBuy: null, effectiveSell: null, marketSpreadPct: 0,
+        inverted: false, fetchedAt: new Date().toISOString(),
+        _override_text: `🚨 *Oracle wallet CRITICAL — out of gas*\nBalance: \`${balEth.toFixed(8)} ETH\`\nFund \`${signer.address}\` on Base NOW — oracle will fail`,
+      });
+    } else if (balEth < WARN) {
+      log("WARN", `Oracle wallet low gas`, { address: signer.address, balEth: balEth.toFixed(8) });
+    } else {
+      log("INFO", `Oracle wallet gas OK`, { balEth: balEth.toFixed(6) });
+    }
+  } catch (e) {
+    log("WARN", `Gas balance check failed (non-fatal): ${e.message}`);
   }
 
   // 7. Always record on-chain sample (chart history) — use raw P2P rates

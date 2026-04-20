@@ -111,10 +111,16 @@ NPM_ABI = [
     },
 ]
 
+RPC_URL_FALLBACK = os.environ.get("RPC_URL_FALLBACK", "https://base.llamarpc.com")
+
 w3    = Web3(Web3.HTTPProvider(RPC_URL))
 vault = w3.eth.contract(address=Web3.to_checksum_address(VAULT_ADDRESS), abi=VAULT_ABI)
 pool  = w3.eth.contract(address=Web3.to_checksum_address(POOL_ADDRESS),  abi=POOL_ABI)
 npm   = w3.eth.contract(address=Web3.to_checksum_address(NPM_ADDRESS),   abi=NPM_ABI)
+
+# Separate Web3 instance for log-heavy operations (chart) — avoids rate-limiting
+# the main w3 instance used by all other commands
+w3_logs = Web3(Web3.HTTPProvider(RPC_URL_FALLBACK))
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -518,17 +524,24 @@ RATE_SAMPLED_TOPIC  = "0x1c1d3f22c7ffab6fec5bb6fcd539d870a933e691ac52fed035ed0cc
 CARACAS_TZ = zoneinfo.ZoneInfo("America/Caracas")
 
 
-def _get_logs_chunked(address, topic, from_block, to_block, chunk=2000):
-    """Fetch event logs in chunks to avoid RPC range limits."""
+def _get_logs_chunked(address, topic, from_block, to_block, chunk=1000):
+    """Fetch event logs in chunks to avoid RPC range limits.
+
+    Uses w3_logs (fallback RPC) to avoid rate-limiting the main w3 instance.
+    chunk=1000 is conservative — llamarpc allows larger but this keeps us safe.
+    """
+    import time
     all_logs = []
     for fb in range(from_block, to_block, chunk):
         tb = min(fb + chunk - 1, to_block)
-        all_logs.extend(w3.eth.get_logs({
+        all_logs.extend(w3_logs.eth.get_logs({
             "address":   Web3.to_checksum_address(address),
             "topics":    [topic],
             "fromBlock": fb,
             "toBlock":   tb,
         }))
+        if fb + chunk < to_block:
+            time.sleep(0.1)  # 100ms between chunks — stays well under rate limits
     return all_logs
 
 
@@ -540,16 +553,15 @@ def fetch_rate_history(hours: int = 24) -> list[tuple]:
     Deduplicates by block number — RatesUpdated takes priority over RateSampled
     when both appear in the same block.
     """
-    current = w3.eth.block_number
+    current = w3_logs.eth.block_number
     # ~2s per block on Base; add 10% buffer
     blocks_back = int(hours * 3600 / 2 * 1.1)
     start = max(0, current - blocks_back)
 
-    # Fetch both event types in parallel threads would be ideal but keep it simple
     updated_logs = _get_logs_chunked(VAULT_ADDRESS, RATES_UPDATED_TOPIC, start, current)
     sampled_logs = _get_logs_chunked(VAULT_ADDRESS, RATE_SAMPLED_TOPIC,  start, current)
 
-    anchor_block = w3.eth.get_block(current)
+    anchor_block = w3_logs.eth.get_block(current)
     anchor_ts    = anchor_block["timestamp"]
     BASE_BLOCK_TIME = 2  # seconds
 
@@ -919,6 +931,21 @@ async def cmd_mm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     vault_spread_pct = (vault_buy_f - vault_sell_f) / vault_sell_f * 100
 
+    # 8. Oracle wallet gas check
+    ORACLE_WALLET    = "0x01210B4069C16C03c701981715F79d17D78c1877"
+    GAS_WARN_ETH     = 0.002   # warn below 0.002 ETH (~1000 pushes)
+    GAS_CRITICAL_ETH = 0.0005  # critical below 0.0005 ETH (~125 pushes)
+    gas_warning = ""
+    try:
+        bal_wei = w3.eth.get_balance(Web3.to_checksum_address(ORACLE_WALLET))
+        bal_eth = bal_wei / 1e18
+        if bal_eth < GAS_CRITICAL_ETH:
+            gas_warning = f"\n\n🚨 *ORACLE WALLET CRITICAL — OUT OF GAS*\n  Balance: `{bal_eth:.6f} ETH`\n  Fund `{ORACLE_WALLET}` on Base NOW — oracle will fail every cycle"
+        elif bal_eth < GAS_WARN_ETH:
+            gas_warning = f"\n\n⚠️ *Oracle wallet low gas*\n  Balance: `{bal_eth:.6f} ETH` — top up soon\n  Address: `{ORACLE_WALLET}`"
+    except Exception:
+        pass
+
     text = (
         f"📊 *Market Maker Dashboard*\n"
         f"─────────────────────────\n\n"
@@ -946,6 +973,7 @@ async def cmd_mm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"  {range_status}\n\n"
         f"*⚡ Action*\n"
         f"  {action}"
+        f"{gas_warning}"
     )
 
     await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
