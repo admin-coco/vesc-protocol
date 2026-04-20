@@ -342,30 +342,19 @@ async function updateRates() {
   server.setBook(bookSnapshot);
   await postBookLog(bookSnapshot);
 
-  // 5. Read on-chain state — try primary RPC, fall back to secondary
+  // 5. Read on-chain state (onchain.js tries primary then fallback RPC automatically)
   let onChain;
   try {
     onChain = await getOnChainRates(CONFIG);
     log("INFO", "On-chain rates", {
-      buy:  onChain.buy.toFixed(4),
-      sell: onChain.sell.toFixed(4),
+      buy:    onChain.buy.toFixed(4),
+      sell:   onChain.sell.toFixed(4),
       ageSec: Math.floor(Date.now() / 1000) - onChain.lastRateUpdate,
+      rpc:    CONFIG.RPC_URL,
     });
-  } catch (primaryRpcErr) {
-    log("WARN", `Primary RPC failed — trying fallback RPC: ${primaryRpcErr.message}`);
-    try {
-      onChain = await getOnChainRates({ ...CONFIG, RPC_URL: CONFIG.RPC_URL_FALLBACK });
-      log("INFO", "On-chain rates (via fallback RPC)", {
-        buy:  onChain.buy.toFixed(4),
-        sell: onChain.sell.toFixed(4),
-        ageSec: Math.floor(Date.now() / 1000) - onChain.lastRateUpdate,
-      });
-      // Promote fallback RPC for the rest of this cycle
-      CONFIG.RPC_URL = CONFIG.RPC_URL_FALLBACK;
-    } catch (fallbackRpcErr) {
-      log("ERROR", `Both RPCs failed`, { primary: primaryRpcErr.message, fallback: fallbackRpcErr.message });
-      return { success: false, reason: "rpc_error", error: fallbackRpcErr.message };
-    }
+  } catch (e) {
+    log("ERROR", `Failed to read on-chain rates (both RPCs tried): ${e.message}`);
+    return { success: false, reason: "rpc_error", error: e.message };
   }
 
   // 6. Build signer for this cycle

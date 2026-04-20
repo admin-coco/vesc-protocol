@@ -34,11 +34,10 @@ function weiToRate(wei) {
 
 /**
  * Build a connected signer from keystore env vars.
+ * Tries primary RPC first, falls back to RPC_URL_FALLBACK if it can't detect network.
  * Decrypts once — caller should cache the result for the whole cycle.
  */
 async function buildSigner(config) {
-  const provider = new ethers.JsonRpcProvider(config.RPC_URL);
-
   // Prefer plain private key (ORACLE_PRIVATE_KEY) — simpler, no decryption ambiguity.
   // Fall back to encrypted keystore (KEYSTORE_JSON + KEYSTORE_PASSWORD) if set.
   let wallet;
@@ -53,25 +52,50 @@ async function buildSigner(config) {
     throw new Error("No signer credentials: set ORACLE_PRIVATE_KEY or KEYSTORE_JSON+KEYSTORE_PASSWORD");
   }
 
-  return wallet.connect(provider);
+  // Try primary RPC — if it fails to detect network, fall back immediately
+  const rpcs = [config.RPC_URL, config.RPC_URL_FALLBACK].filter(Boolean);
+  let lastErr;
+  for (const rpcUrl of rpcs) {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      await provider.getNetwork(); // fast connectivity check
+      // Promote this RPC for the rest of the cycle
+      config.RPC_URL = rpcUrl;
+      return wallet.connect(provider);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error(`All RPCs failed in buildSigner: ${lastErr?.message}`);
 }
 
 /**
  * Read current on-chain rates and staleness.
+ * Tries primary RPC first, falls back to RPC_URL_FALLBACK on failure.
  */
 async function getOnChainRates(config) {
-  const provider = new ethers.JsonRpcProvider(config.RPC_URL);
-  const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, provider);
-  const [buyWei, sellWei, lastUpdate] = await Promise.all([
-    vault.buyRate(),
-    vault.sellRate(),
-    vault.lastRateUpdate(),
-  ]);
-  return {
-    buy:            weiToRate(buyWei),
-    sell:           weiToRate(sellWei),
-    lastRateUpdate: Number(lastUpdate),
-  };
+  const rpcs = [config.RPC_URL, config.RPC_URL_FALLBACK].filter(Boolean);
+  let lastErr;
+  for (const rpcUrl of rpcs) {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, provider);
+      const [buyWei, sellWei, lastUpdate] = await Promise.all([
+        vault.buyRate(),
+        vault.sellRate(),
+        vault.lastRateUpdate(),
+      ]);
+      config.RPC_URL = rpcUrl; // promote working RPC for this cycle
+      return {
+        buy:            weiToRate(buyWei),
+        sell:           weiToRate(sellWei),
+        lastRateUpdate: Number(lastUpdate),
+      };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error(`All RPCs failed in getOnChainRates: ${lastErr?.message}`);
 }
 
 /**
