@@ -16,7 +16,7 @@ const fs      = require("fs");
 const path    = require("path");
 const https   = require("https");
 
-const { fetchBinanceRates } = require("./binance");
+const { fetchBinanceRates, fetchYadioRates } = require("./binance");
 const { buildSigner, getOnChainRates, pushRates, recordSample } = require("./onchain");
 const server = require("./server");
 
@@ -33,6 +33,7 @@ if (fs.existsSync(envPath)) {
 const CONFIG = {
   VAULT_ADDRESS:     process.env.VAULT_ADDRESS     || "0x50f50cf026837ab49f337927d2b3269a7dedbc60",
   RPC_URL:           process.env.RPC_URL            || "https://mainnet.base.org",
+  RPC_URL_FALLBACK:  process.env.RPC_URL_FALLBACK   || "https://base.llamarpc.com",
   ORACLE_PRIVATE_KEY: process.env.ORACLE_PRIVATE_KEY,
   KEYSTORE_JSON:      process.env.KEYSTORE_JSON,
   KEYSTORE_PASSWORD:  process.env.KEYSTORE_PASSWORD,
@@ -207,8 +208,9 @@ async function updateRates() {
     return { success: false, reason: "spread_halt", spreadBps: spread.spreadBps };
   }
 
-  // 2. Fetch Binance P2P rates
+  // 2. Fetch rates — Binance P2P primary, Yadio fallback
   let p2pRates;
+  let rateSource = "binance_p2p";
   try {
     p2pRates = await fetchBinanceRates({
       ROWS:       CONFIG.ROWS,
@@ -238,9 +240,24 @@ async function updateRates() {
       });
     }
     server.setRates(p2pRates);
-  } catch (e) {
-    log("ERROR", `Binance P2P fetch failed: ${e.message}`);
-    return { success: false, reason: "binance_error", error: e.message };
+  } catch (binanceErr) {
+    log("WARN", `Binance P2P failed — trying Yadio fallback: ${binanceErr.message}`);
+    try {
+      p2pRates = await fetchYadioRates(CONFIG.TIMEOUT_MS);
+      rateSource = "yadio_fallback";
+      log("WARN", "Using Yadio fallback rates (degraded mode — symmetric 0.5% spread)", {
+        buy:  p2pRates.buy.toFixed(4),
+        sell: p2pRates.sell.toFixed(4),
+        mid:  p2pRates.mid.toFixed(4),
+      });
+      server.setRates(p2pRates);
+    } catch (yadioErr) {
+      log("ERROR", `Both Binance P2P and Yadio failed — skipping cycle`, {
+        binance: binanceErr.message,
+        yadio:   yadioErr.message,
+      });
+      return { success: false, reason: "all_sources_failed", binance: binanceErr.message, yadio: yadioErr.message };
+    }
   }
 
   const { buy: apiBuy, sell: apiSell } = p2pRates;
@@ -312,7 +329,7 @@ async function updateRates() {
   server.setBook(bookSnapshot);
   await postBookLog(bookSnapshot);
 
-  // 5. Read on-chain state
+  // 5. Read on-chain state — try primary RPC, fall back to secondary
   let onChain;
   try {
     onChain = await getOnChainRates(CONFIG);
@@ -321,9 +338,21 @@ async function updateRates() {
       sell: onChain.sell.toFixed(4),
       ageSec: Math.floor(Date.now() / 1000) - onChain.lastRateUpdate,
     });
-  } catch (e) {
-    log("ERROR", `Failed to read on-chain rates: ${e.message}`);
-    return { success: false, reason: "rpc_error", error: e.message };
+  } catch (primaryRpcErr) {
+    log("WARN", `Primary RPC failed — trying fallback RPC: ${primaryRpcErr.message}`);
+    try {
+      onChain = await getOnChainRates({ ...CONFIG, RPC_URL: CONFIG.RPC_URL_FALLBACK });
+      log("INFO", "On-chain rates (via fallback RPC)", {
+        buy:  onChain.buy.toFixed(4),
+        sell: onChain.sell.toFixed(4),
+        ageSec: Math.floor(Date.now() / 1000) - onChain.lastRateUpdate,
+      });
+      // Promote fallback RPC for the rest of this cycle
+      CONFIG.RPC_URL = CONFIG.RPC_URL_FALLBACK;
+    } catch (fallbackRpcErr) {
+      log("ERROR", `Both RPCs failed`, { primary: primaryRpcErr.message, fallback: fallbackRpcErr.message });
+      return { success: false, reason: "rpc_error", error: fallbackRpcErr.message };
+    }
   }
 
   // 6. Build signer for this cycle
@@ -385,8 +414,8 @@ async function updateRates() {
 
   try {
     const receipt = await pushRates(signer, CONFIG, effectiveBuy, effectiveSell);
-    log("OK", "Rates updated on-chain", { txHash: receipt.hash, buy: effectiveBuy, sell: effectiveSell, spreadMode });
-    return { success: true, reason: "updated", apiBuy, apiSell, txHash: receipt.hash };
+    log("OK", "Rates updated on-chain", { txHash: receipt.hash, buy: effectiveBuy, sell: effectiveSell, spreadMode, source: rateSource });
+    return { success: true, reason: "updated", apiBuy, apiSell, txHash: receipt.hash, source: rateSource };
   } catch (e) {
     log("ERROR", `setRates failed: ${e.message}`);
     return { success: false, reason: "tx_error", error: e.message };

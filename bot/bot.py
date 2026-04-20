@@ -511,42 +511,70 @@ async def cmd_fees(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── /chart ────────────────────────────────────────────────────────────────
 
+# RatesUpdated(uint256 oldBuy, uint256 newBuy, uint256 oldSell, uint256 newSell)
 RATES_UPDATED_TOPIC = "0x83ee137d4eea1eef0029a0cb811df31b555f216d3a45c791729e226eb145a7d5"
+# RateSampled(uint256 buy, uint256 sell, uint256 timestamp)
+RATE_SAMPLED_TOPIC  = "0x1c1d3f22c7ffab6fec5bb6fcd539d870a933e691ac52fed035ed0cc998957bac"
 CARACAS_TZ = zoneinfo.ZoneInfo("America/Caracas")
 
 
+def _get_logs_chunked(address, topic, from_block, to_block, chunk=2000):
+    """Fetch event logs in chunks to avoid RPC range limits."""
+    all_logs = []
+    for fb in range(from_block, to_block, chunk):
+        tb = min(fb + chunk - 1, to_block)
+        all_logs.extend(w3.eth.get_logs({
+            "address":   Web3.to_checksum_address(address),
+            "topics":    [topic],
+            "fromBlock": fb,
+            "toBlock":   tb,
+        }))
+    return all_logs
+
+
 def fetch_rate_history(hours: int = 24) -> list[tuple]:
-    """Return list of (timestamp, buy, sell) from RatesUpdated events."""
+    """Return list of (timestamp, buy, sell) from on-chain events.
+
+    Merges RatesUpdated (state change) and RateSampled (heartbeat) events so
+    the chart works even on cycles where setRates() was skipped (no-change / mid-collapse).
+    Deduplicates by block number — RatesUpdated takes priority over RateSampled
+    when both appear in the same block.
+    """
     current = w3.eth.block_number
     # ~2s per block on Base; add 10% buffer
     blocks_back = int(hours * 3600 / 2 * 1.1)
-    start = current - blocks_back
-    chunk = 2000
-    all_logs = []
-    for fb in range(start, current, chunk):
-        tb = min(fb + chunk - 1, current)
-        logs = w3.eth.get_logs({
-            "address": Web3.to_checksum_address(VAULT_ADDRESS),
-            "topics":  [RATES_UPDATED_TOPIC],
-            "fromBlock": fb,
-            "toBlock":   tb,
-        })
-        all_logs.extend(logs)
+    start = max(0, current - blocks_back)
 
-    # Get one anchor block to compute timestamps — avoids N sequential get_block calls
+    # Fetch both event types in parallel threads would be ideal but keep it simple
+    updated_logs = _get_logs_chunked(VAULT_ADDRESS, RATES_UPDATED_TOPIC, start, current)
+    sampled_logs = _get_logs_chunked(VAULT_ADDRESS, RATE_SAMPLED_TOPIC,  start, current)
+
     anchor_block = w3.eth.get_block(current)
     anchor_ts    = anchor_block["timestamp"]
     BASE_BLOCK_TIME = 2  # seconds
 
-    points = []
-    for log in all_logs:
-        block_delta = current - log["blockNumber"]
-        ts  = anchor_ts - block_delta * BASE_BLOCK_TIME
-        raw = bytes.fromhex(log["data"].hex().removeprefix("0x"))
+    points_by_block = {}
+
+    # RateSampled(uint256 buy, uint256 sell, uint256 timestamp) — 3 words
+    for entry in sampled_logs:
+        raw  = bytes.fromhex(entry["data"].hex().removeprefix("0x"))
+        vals = [int.from_bytes(raw[i*32:(i+1)*32], "big") / 1e18 for i in range(3)]
+        buy, sell, _ts = vals
+        block_delta = current - entry["blockNumber"]
+        ts = anchor_ts - block_delta * BASE_BLOCK_TIME
+        points_by_block[entry["blockNumber"]] = (ts, buy, sell)
+
+    # RatesUpdated(uint256 oldBuy, uint256 newBuy, uint256 oldSell, uint256 newSell) — 4 words
+    # Overwrite any RateSampled entry for the same block — state change is authoritative
+    for entry in updated_logs:
+        raw  = bytes.fromhex(entry["data"].hex().removeprefix("0x"))
         vals = [int.from_bytes(raw[i*32:(i+1)*32], "big") / 1e18 for i in range(4)]
         _old_buy, new_buy, _old_sell, new_sell = vals
-        points.append((ts, new_buy, new_sell))
-    return sorted(points, key=lambda p: p[0])
+        block_delta = current - entry["blockNumber"]
+        ts = anchor_ts - block_delta * BASE_BLOCK_TIME
+        points_by_block[entry["blockNumber"]] = (ts, new_buy, new_sell)
+
+    return sorted(points_by_block.values(), key=lambda p: p[0])
 
 
 def build_chart(points: list[tuple], hours: int) -> io.BytesIO:

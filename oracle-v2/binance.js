@@ -297,4 +297,67 @@ async function fetchBinanceRates(cfg = {}) {
   };
 }
 
-module.exports = { fetchBinanceRates, fetchP2PSide, weightedMedian, topNSimpleMedian, isPromotedAd };
+// ─── Yadio fallback ───────────────────────────────────────────────────────────
+
+/**
+ * Fetch VES/USD mid-rate from Yadio.io as a fallback when Binance P2P is unavailable.
+ * Yadio aggregates multiple Venezuelan exchange sources and is accessible without geo-blocks.
+ *
+ * Returns { buy, sell, source } where buy/sell are symmetric around the mid (0.5% spread).
+ * This is a degraded mode — use only when Binance P2P is unreachable.
+ */
+async function fetchYadioRates(timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const url = "https://api.yadio.io/exrates/USD";
+    const u   = new URL(url);
+    const req = https.request({
+      hostname: u.hostname,
+      path:     u.pathname,
+      method:   "GET",
+      headers:  { "User-Agent": "vesc-oracle/2.0", "Accept": "application/json" },
+    }, (res) => {
+      const chunks = [];
+      res.on("data", c => chunks.push(c));
+      res.on("end", () => {
+        const raw = Buffer.concat(chunks).toString("utf8");
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Yadio HTTP ${res.statusCode}: ${raw.slice(0, 100)}`));
+        }
+        try {
+          const data = JSON.parse(raw);
+          // Yadio returns { USD: { VES: <rate>, ... }, ... }
+          const rate = data?.USD?.VES;
+          if (!rate || !isFinite(rate) || rate <= 0) {
+            return reject(new Error(`Yadio: invalid VES rate: ${rate}`));
+          }
+          // Apply a minimal symmetric spread (0.5%) — degraded mode
+          const spread = rate * 0.005;
+          resolve({
+            buy:       rate + spread / 2,
+            sell:      rate - spread / 2,
+            mid:       rate,
+            source:    "yadio_fallback",
+            fetchedAt: new Date().toISOString(),
+            // Dummy fields so caller can treat it like a Binance result
+            buyAdsUsed:          0,
+            sellAdsUsed:         0,
+            buyPromotedRemoved:  0,
+            sellPromotedRemoved: 0,
+            buyTopNPrices:       [],
+            sellTopNPrices:      [],
+            buyTopNMedian:       null,
+            sellTopNMedian:      null,
+            inverted:            false,
+          });
+        } catch (e) {
+          reject(new Error(`Yadio JSON parse error: ${e.message}`));
+        }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error("Yadio request timed out")); });
+    req.end();
+  });
+}
+
+module.exports = { fetchBinanceRates, fetchP2PSide, weightedMedian, topNSimpleMedian, isPromotedAd, fetchYadioRates };
