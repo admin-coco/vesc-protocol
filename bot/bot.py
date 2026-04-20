@@ -111,7 +111,7 @@ NPM_ABI = [
     },
 ]
 
-RPC_URL_FALLBACK = os.environ.get("RPC_URL_FALLBACK", "https://base.llamarpc.com")
+RPC_URL_FALLBACK = os.environ.get("RPC_URL_FALLBACK", "https://rpc.ankr.com/base")
 
 w3    = Web3(Web3.HTTPProvider(RPC_URL))
 vault = w3.eth.contract(address=Web3.to_checksum_address(VAULT_ADDRESS), abi=VAULT_ABI)
@@ -119,8 +119,31 @@ pool  = w3.eth.contract(address=Web3.to_checksum_address(POOL_ADDRESS),  abi=POO
 npm   = w3.eth.contract(address=Web3.to_checksum_address(NPM_ADDRESS),   abi=NPM_ABI)
 
 # Separate Web3 instance for log-heavy operations (chart) — avoids rate-limiting
-# the main w3 instance used by all other commands
-w3_logs = Web3(Web3.HTTPProvider(RPC_URL_FALLBACK))
+# the main w3 instance. Tries RPC_URL_FALLBACK first, then a hardcoded backup list.
+def _build_w3_logs() -> Web3:
+    candidates = [
+        RPC_URL_FALLBACK,
+        "https://rpc.ankr.com/base",
+        "https://1rpc.io/base",
+        "https://base.drpc.org",
+    ]
+    seen = set()
+    for url in candidates:
+        if url in seen:
+            continue
+        seen.add(url)
+        try:
+            w = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 5}))
+            w.eth.block_number  # quick connectivity check
+            log.info("w3_logs using RPC: %s", url)
+            return w
+        except Exception as e:
+            log.warning("w3_logs RPC %s failed: %s", url, e)
+    # Last resort: return primary RPC (will share rate limit with w3, but won't crash)
+    log.warning("All w3_logs fallback RPCs failed — falling back to primary RPC")
+    return Web3(Web3.HTTPProvider(RPC_URL))
+
+w3_logs = _build_w3_logs()
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 

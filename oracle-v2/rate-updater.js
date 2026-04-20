@@ -205,6 +205,10 @@ async function fetchSpread() {
   }
 }
 
+// ─── Gas alert state (persists across cycles in watch mode) ──────────────────
+// Tracks last Telegram alert timestamps to avoid spamming on every cycle.
+const gasAlertState = {};
+
 // ─── Core update cycle ────────────────────────────────────────────────────────
 
 async function updateRates() {
@@ -366,23 +370,38 @@ async function updateRates() {
     return { success: false, reason: "signer_error", error: e.message };
   }
 
-  // 6b. Gas balance check — warn before we run dry
+  // 6b. Gas balance check — alert via Telegram before we run dry
+  // Alerts are rate-limited to once per 12h to avoid spamming the channel.
   try {
     const balWei  = await signer.provider.getBalance(signer.address);
     const balEth  = Number(balWei) / 1e18;
-    const WARN     = 0.002;   // ~1000 pushes remaining
-    const CRITICAL = 0.0005;  // ~125 pushes remaining
+    const WARN     = 0.003;   // ~1500 pushes / ~5 days remaining — early warning
+    const CRITICAL = 0.0005;  // ~125 pushes / ~10 hours remaining — act now
+    const ALERT_INTERVAL_MS = 12 * 60 * 60 * 1000; // 12 hours between repeat alerts
+    const now = Date.now();
+
     if (balEth < CRITICAL) {
       log("ERROR", `Oracle wallet CRITICAL — almost no gas left`, { address: signer.address, balEth: balEth.toFixed(8) });
-      await postBookLog({
-        spreadMode: "market_chaos",
-        buyPrices: [], sellPrices: [], buyAdsUsed: 0, sellAdsUsed: 0,
-        effectiveBuy: null, effectiveSell: null, marketSpreadPct: 0,
-        inverted: false, fetchedAt: new Date().toISOString(),
-        _override_text: `🚨 *Oracle wallet CRITICAL — out of gas*\nBalance: \`${balEth.toFixed(8)} ETH\`\nFund \`${signer.address}\` on Base NOW — oracle will fail`,
-      });
+      if (!gasAlertState.lastCritical || now - gasAlertState.lastCritical > ALERT_INTERVAL_MS) {
+        gasAlertState.lastCritical = now;
+        await postBookLog({ _override_text:
+          `🚨 *Oracle wallet CRITICAL — out of gas*\n` +
+          `Balance: \`${balEth.toFixed(6)} ETH\`\n` +
+          `Fund \`${signer.address}\` on Base NOW\n` +
+          `Oracle will stop pushing rates within ~10 hours`,
+        });
+      }
     } else if (balEth < WARN) {
-      log("WARN", `Oracle wallet low gas`, { address: signer.address, balEth: balEth.toFixed(8) });
+      log("WARN", `Oracle wallet low gas`, { address: signer.address, balEth: balEth.toFixed(6) });
+      if (!gasAlertState.lastWarn || now - gasAlertState.lastWarn > ALERT_INTERVAL_MS) {
+        gasAlertState.lastWarn = now;
+        await postBookLog({ _override_text:
+          `⚠️ *Oracle wallet low on gas*\n` +
+          `Balance: \`${balEth.toFixed(6)} ETH\` (~${Math.floor(balEth / 0.000002)} pushes left)\n` +
+          `Top up \`${signer.address}\` on Base soon\n` +
+          `Recommended: send 0.01 ETH (~$25)`,
+        });
+      }
     } else {
       log("INFO", `Oracle wallet gas OK`, { balEth: balEth.toFixed(6) });
     }
