@@ -121,6 +121,15 @@ async function getGasPrice(provider, multiplier = 1.5) {
 }
 
 /**
+ * Fetch the next confirmed nonce for the signer — always reads from chain,
+ * never relies on ethers.js cached state. Prevents nonce collisions between
+ * sequential recordSample + setRates calls within the same cycle.
+ */
+async function getNextNonce(signer) {
+  return signer.provider.getTransactionCount(signer.address, "latest");
+}
+
+/**
  * Push both rates on-chain via setRates().
  * Returns the transaction receipt.
  */
@@ -130,7 +139,8 @@ async function pushRates(signer, config, buyRate, sellRate) {
   }
   const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, signer);
   const gasPrice = await getGasPrice(signer.provider);
-  const tx       = await vault.setRates(rateToWei(buyRate), rateToWei(sellRate), { gasPrice });
+  const nonce    = await getNextNonce(signer);
+  const tx       = await vault.setRates(rateToWei(buyRate), rateToWei(sellRate), { gasPrice, nonce });
   return tx.wait();
 }
 
@@ -141,7 +151,8 @@ async function pushRates(signer, config, buyRate, sellRate) {
 async function recordSample(signer, config, buyRate, sellRate) {
   const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, signer);
   const gasPrice = await getGasPrice(signer.provider);
-  const tx       = await vault.recordSample(rateToWei(buyRate), rateToWei(sellRate), { gasPrice });
+  const nonce    = await getNextNonce(signer);
+  const tx       = await vault.recordSample(rateToWei(buyRate), rateToWei(sellRate), { gasPrice, nonce });
   return tx.wait();
 }
 
