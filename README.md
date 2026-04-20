@@ -2,7 +2,7 @@
 
 **VESC** is a Venezuelan bolívar-indexed token on Base. Users deposit USDC into the vault and receive VESC tokens priced at the live VES/USD exchange rate — 1 VESC always equals 1 Venezuelan bolívar. When they redeem, they get back the USDC equivalent of their bolívares at the current rate, minus a 0.25% fee. The USD value of VESC moves with the VES/USD rate, just like holding bolívares.
 
-> Built on Base · Powered by Coco FX rates · UUPS upgradeable · Audited dependencies (OpenZeppelin v5)
+> Built on Base · Powered by Binance P2P rates · UUPS upgradeable · Audited dependencies (OpenZeppelin v5)
 
 ---
 
@@ -33,18 +33,18 @@ User deposits $1 USDC
        │
        ▼
   VESCVault.mint()
-  applies sellRate (e.g. 612 VES/USD)
+  applies sellRate (e.g. 619 VES/USD)
        │
        ▼
-User receives 612 VESC
+User receives 619 VESC  (≈ Bs. 619)
        │
        ▼  (later)
   VESCVault.burn()
-  applies buyRate (e.g. 704 VES/USD)
+  applies buyRate (e.g. 625 VES/USD)
   deducts 0.25% fee
        │
        ▼
-User receives ~0.87 USDC back
+User receives ~0.989 USDC back
 ```
 
 **Two rates, one spread:**
@@ -76,10 +76,10 @@ Rates expire after 30 minutes. If the oracle has not pushed a new rate, `mint()`
 └────────────────────────────────────────────┼────────────┘
                                              │
                               ┌──────────────┴──────────────┐
-                              │      Oracle (Railway)        │
+                              │      Oracle v2 (Railway)     │
                               │   node rate-updater.js       │
-                              │   fetches Coco FX API        │
-                              │   every 15 minutes           │
+                              │   fetches Binance P2P        │
+                              │   every 5 minutes            │
                               └──────────────────────────────┘
 ```
 
@@ -161,43 +161,49 @@ Core protocol logic. UUPS upgradeable proxy (ERC1967).
 | Role | Address |
 |---|---|
 | Owner (cold) | `0x7f221e26628877249ace0c01b5715e3c2a4e30f9` |
-| Rate Updater (hot) | `0x1fDFEB8CFB872ACfB410F980A4FdabD6a8405fe1` |
+| Rate Updater (hot) | `0x01210B4069C16C03c701981715F79d17D78c1877` |
 
 ---
 
 ## Rate Oracle
 
-The oracle (`oracle/rate-updater.js`) runs on Railway and pushes live VES/USD rates on-chain every 15 minutes.
+The oracle (`oracle-v2/rate-updater.js`) runs on Railway and pushes live VES/USD rates on-chain every 5 minutes.
 
 **Flow:**
-1. Fetches `crixtoRecharge` (buy) and `crixtoWithdraw` (sell) rates from Coco FX API
-2. Validates rates are within 20% of current on-chain values (safety circuit breaker)
-3. Calls `setRates(buyRate, sellRate)` on the vault
-4. Also calls `recordSample()` every cycle for verifiable on-chain chart history
+1. Scrapes Binance P2P USDT/VES order book (buy and sell ads separately)
+2. Filters promoted ads, removes outliers (±15%), computes a volume-weighted median across ≥15 ads
+3. Validates the new rate is within 5% of the current on-chain value (circuit breaker)
+4. Calls `setRates(buyRate, sellRate)` on the vault — skips if market moved less than 0.1%
+5. Calls `recordSample()` every cycle for verifiable on-chain chart history
+6. Posts a P2P order book snapshot to Telegram for operator audit
+
+**Rate mapping:**
+- Binance P2P **SELL** ads (merchants selling USDT → higher VES prices) → vault `buyRate`
+- Binance P2P **BUY** ads (merchants buying USDT → lower VES prices) → vault `sellRate`
+- If P2P spread exceeds 4%, both rates collapse to mid price (spread → 0 on-chain)
 
 **Required environment variables:**
 
 ```bash
-FX_API_URL=           # Coco FX API endpoint
-FX_API_KEY=           # Coco JWT bearer token
-KEYSTORE_JSON=        # Encrypted keystore JSON for rate updater wallet
-KEYSTORE_PASSWORD=    # Keystore decryption password
+ORACLE_PRIVATE_KEY=   # Plain hex private key for rate updater wallet
+VAULT_ADDRESS=        # 0x50f50cf026837ab49f337927d2b3269a7dedbc60
 RPC_URL=              # Base RPC (default: https://mainnet.base.org)
+INTERVAL_MINUTES=     # Push frequency (set to 5 in Railway)
+BOOK_LOG_CHAT_IDS=    # Comma-separated Telegram chat IDs for order book logs
 ```
 
 **Run locally:**
 ```bash
-cd oracle
+cd oracle-v2
 npm install
-node rate-updater.js          # single run
-node rate-updater.js --watch  # run every 15 minutes
+node rate-updater.js
 ```
 
 **Health check:**
 ```bash
 node health-check.js
 ```
-Checks vault state, reserve solvency, rate freshness, FX API connectivity, and oracle process in one pass.
+Checks vault state, reserve solvency, rate freshness, Binance P2P connectivity, and oracle process in one pass.
 
 ---
 
@@ -209,17 +215,26 @@ An operator bot (`bot/bot.py`) for monitoring the protocol in real time.
 
 | Command | Description |
 |---|---|
-| `/rates` | Live buy/sell rates and staleness |
-| `/pool` | Uniswap pool tick position, in-range status, and link |
+| `/rates` | Live buy/sell rates, spread %, and staleness age |
+| `/price` | Simple current rate display |
+| `/quote` | Mint/burn quote for a given USDC or VESC amount |
 | `/vault` | Vault reserves, VESC supply, paused/emergency state |
+| `/pool` | Uniswap v3 pool tick, in-range status, and link |
+| `/fees` | Uncollected LP fees on position NFT #4876722 |
+| `/chart` | 24h buy/sell rate history with spread panel |
+| `/book` | Binance P2P order book snapshot used for last oracle rate |
+| `/mm` | Market maker dashboard: arb gap, IL estimate, fee APR, action signal |
 | `/health` | Full system health across all layers |
+| `/alert` | Set a % change alert threshold |
+| `/schedule` | Configure auto-posts to a channel |
+| `/stop` | Stop active alert |
 
 **Setup:**
 ```bash
 cd bot
 pip install -r requirements.txt
 cp .env.example .env
-# fill in TELEGRAM_TOKEN in .env
+# fill in TELEGRAM_TOKEN and RPC_URL in .env
 python bot.py
 ```
 
@@ -255,8 +270,8 @@ forge install
 The test suite covers:
 - Mint / burn at various rates
 - Rate staleness enforcement
-- Rate change circuit breaker (20% max)
-- Minimum update interval (10 min)
+- Rate change circuit breaker (5% max)
+- Minimum update interval (5 min)
 - Slippage protection on mint and burn
 - Reserve invariant (vault always solvent)
 - Pause / unpause
@@ -313,8 +328,8 @@ The vault uses UUPS (ERC1967). Only the owner can authorize upgrades.
 | Threat | Mitigation |
 |---|---|
 | Stale price arbitrage | `MAX_RATE_STALENESS = 30 min` — mint/burn revert if oracle is silent |
-| Oracle manipulation | `MAX_RATE_CHANGE_BPS = 20%` per update — large jumps revert |
-| Rate spam | `MIN_RATE_UPDATE_INTERVAL = 10 min` — prevents rapid cycling |
+| Oracle manipulation | `MAX_RATE_CHANGE_BPS = 5%` per update — large jumps revert |
+| Rate spam | `MIN_RATE_UPDATE_INTERVAL = 5 min` — prevents rapid cycling |
 | Hot wallet compromise | `setRateUpdater()` — owner can rotate in one tx; hot wallet cannot touch funds |
 | USDC blacklist | Emergency mode + USDT rescue token — pro-rata redemption without USDC |
 | Reserve deficit | `_checkInvariant()` — reverts any burn that would leave vault undercollateralized |
@@ -330,9 +345,9 @@ The vault uses UUPS (ERC1967). Only the owner can authorize upgrades.
 | Parameter | Value | Notes |
 |---|---|---|
 | `FEE_BPS` | 25 (0.25%) | Deducted from USDC on burn |
-| `MAX_RATE_CHANGE_BPS` | 2000 (20%) | Max rate movement per oracle update |
+| `MAX_RATE_CHANGE_BPS` | 500 (5%) | Max rate movement per oracle update |
 | `MAX_RATE_STALENESS` | 30 minutes | After this, mint/burn revert |
-| `MIN_RATE_UPDATE_INTERVAL` | 10 minutes | Minimum time between oracle pushes |
+| `MIN_RATE_UPDATE_INTERVAL` | 5 minutes | Minimum time between oracle pushes |
 | USDC decimals | 6 | Base USDC |
 | VESC decimals | 18 | Standard ERC20 |
 
@@ -372,8 +387,8 @@ At sufficient scale, ownership transitions to an on-chain governance contract �
 
 The oracle is the most trust-sensitive component of the protocol. Its evolution follows a clear path from centralized to decentralized price feeds.
 
-**Phase 1 — Single FX Provider (current)**
-Rates are sourced exclusively from the Coco FX API and pushed on-chain by a single hot wallet every 15 minutes. Simple, fast, and sufficient for early adoption. Risk: single provider outage or compromise halts rate updates.
+**Phase 1 — Binance P2P (current)**
+Rates are derived from a volume-weighted median of Binance P2P USDT/VES ads and pushed on-chain by a single hot wallet every 5 minutes. Simple, fast, and sufficient for early adoption. Risk: single provider outage or compromise halts rate updates.
 
 **Phase 2 — Aggregated FX Providers**
 Three or more independent FX data providers (e.g. Coco, Yadio, ExchangeRate.host) are queried each cycle. The oracle computes a median or weighted average and rejects any update where providers diverge beyond a threshold. A single compromised or offline provider cannot move the on-chain rate. The `setRateUpdater()` mechanism supports swapping in an upgraded oracle without any contract changes.
