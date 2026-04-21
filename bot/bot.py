@@ -1018,6 +1018,116 @@ async def cmd_mm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown", disable_web_page_preview=True)
 
 
+# ── /sheet ────────────────────────────────────────────────────────────────
+
+async def cmd_sheet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    /sheet [Xd] — export on-chain rate history as a CSV file.
+    Examples: /sheet 7d  /sheet 1d  /sheet 30d  (default: 7d, max: 90d)
+    Columns: timestamp_utc, buy_rate, sell_rate, mid_rate, spread_pct, block, tx_hash, basescan_url
+    """
+    # Parse argument — default 7d, max 90d
+    days = 7
+    if ctx.args:
+        arg = ctx.args[0].lower().rstrip("d")
+        try:
+            days = max(1, min(90, int(arg)))
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Usage: `/sheet 7d` — number of days (1–90)",
+                parse_mode="Markdown",
+            )
+            return
+
+    msg = await update.message.reply_text(
+        f"⏳ Fetching {days}d of on-chain rate history... this may take ~30s"
+    )
+
+    try:
+        import io as _io
+        import time as _time
+
+        # Fetch logs using existing w3_logs instance
+        current   = w3_logs.eth.block_number
+        blocks_back = int(days * 24 * 3600 / 2 * 1.05)
+        start_block = max(0, current - blocks_back)
+
+        updated_logs = _get_logs_chunked(VAULT_ADDRESS, RATES_UPDATED_TOPIC, start_block, current)
+        sampled_logs = _get_logs_chunked(VAULT_ADDRESS, RATE_SAMPLED_TOPIC,  start_block, current)
+
+        anchor_block = w3_logs.eth.get_block(current)
+        anchor_ts    = anchor_block["timestamp"]
+        BASE_BLOCK_TIME = 2
+
+        rows_by_block = {}
+
+        for entry in sampled_logs:
+            raw  = bytes.fromhex(entry["data"].hex().removeprefix("0x"))
+            vals = [int.from_bytes(raw[i*32:(i+1)*32], "big") / 1e18 for i in range(3)]
+            buy, sell, _ts = vals
+            spread = (buy - sell) / sell * 100 if sell > 0 else 0
+            if spread > 5.0:
+                continue
+            block_num   = entry["blockNumber"]
+            block_delta = current - block_num
+            ts = anchor_ts - block_delta * BASE_BLOCK_TIME
+            mid = (buy + sell) / 2
+            rows_by_block[block_num] = (ts, buy, sell, mid, spread, block_num, entry["transactionHash"])
+
+        for entry in updated_logs:
+            raw  = bytes.fromhex(entry["data"].hex().removeprefix("0x"))
+            vals = [int.from_bytes(raw[i*32:(i+1)*32], "big") / 1e18 for i in range(4)]
+            _old_buy, new_buy, _old_sell, new_sell = vals
+            spread = (new_buy - new_sell) / new_sell * 100 if new_sell > 0 else 0
+            if spread > 5.0:
+                continue
+            block_num   = entry["blockNumber"]
+            block_delta = current - block_num
+            ts  = anchor_ts - block_delta * BASE_BLOCK_TIME
+            mid = (new_buy + new_sell) / 2
+            rows_by_block[block_num] = (ts, new_buy, new_sell, mid, spread, block_num, entry["transactionHash"])
+
+        rows = sorted(rows_by_block.values(), key=lambda r: r[0])
+
+        if not rows:
+            await msg.edit_text("❌ No on-chain data found for that period.")
+            return
+
+        # Build CSV in memory
+        buf = _io.StringIO()
+        buf.write("timestamp_utc,buy_rate,sell_rate,mid_rate,spread_pct,block,tx_hash,basescan_url\n")
+        for ts, buy, sell, mid, spread, block_num, txhash in rows:
+            dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            buf.write(
+                f"{dt},{buy:.4f},{sell:.4f},{mid:.4f},{spread:.4f},"
+                f"{block_num},{txhash},https://basescan.org/tx/{txhash}\n"
+            )
+
+        csv_bytes = buf.getvalue().encode("utf-8")
+        filename  = f"vesc-rates-{days}d.csv"
+
+        now_utc = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        await update.message.reply_document(
+            document=_io.BytesIO(csv_bytes),
+            filename=filename,
+            caption=(
+                f"📊 *VESC Rate History — last {days} days*\n"
+                f"`{len(rows)}` samples · exported {now_utc}\n\n"
+                f"Each row links to its Basescan tx for on-chain audit.\n"
+                f"Vault: `{VAULT_ADDRESS}`"
+            ),
+            parse_mode="Markdown",
+        )
+        await msg.delete()
+
+    except Exception as e:
+        log.error("sheet error: %s", e, exc_info=True)
+        await msg.edit_text(
+            f"❌ Sheet failed: `{type(e).__name__}: {str(e)[:120]}`",
+            parse_mode="Markdown",
+        )
+
+
 # ── /stop ─────────────────────────────────────────────────────────────────
 
 async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1052,6 +1162,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "  /mm — market maker dashboard: arb gap, IL, fee APR, action signal\n"
         "  /alert 2.5 — notify when rate moves ±2.5%\n"
         "  /schedule 60 — post rate every 60 min\n"
+        "  /sheet 7d — export 7 days of rates as CSV (auditable on-chain links)\n"
         "  /stop — cancel all alerts & schedules",
         parse_mode="Markdown",
     )
@@ -1073,6 +1184,7 @@ def main():
     app.add_handler(CommandHandler("chart",    cmd_chart))
     app.add_handler(CommandHandler("book",     cmd_book))
     app.add_handler(CommandHandler("mm",       cmd_mm))
+    app.add_handler(CommandHandler("sheet",    cmd_sheet))
     app.add_handler(CommandHandler("stop",     cmd_stop))
 
     log.info("Bot starting...")
