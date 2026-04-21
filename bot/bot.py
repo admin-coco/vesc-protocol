@@ -619,9 +619,18 @@ def build_chart(points: list[tuple], hours: int) -> io.BytesIO:
     import matplotlib.dates as mdates
     import matplotlib.patches as mpatches
 
-    times  = [datetime.fromtimestamp(p[0], tz=CARACAS_TZ) for p in points]
-    buys   = [p[1] for p in points]
-    sells  = [p[2] for p in points]
+    # Filter out bad samples: any point where spread > 5% was rejected by the
+    # oracle guards and never pushed on-chain — it's a broken oracle artifact.
+    CHART_MAX_SPREAD_PCT = 5.0
+    clean = [(ts, b, s) for ts, b, s in points
+             if s > 0 and (b - s) / s * 100 <= CHART_MAX_SPREAD_PCT]
+    # Fall back to all points if filtering removes everything
+    if len(clean) < 2:
+        clean = points
+
+    times  = [datetime.fromtimestamp(p[0], tz=CARACAS_TZ) for p in clean]
+    buys   = [p[1] for p in clean]
+    sells  = [p[2] for p in clean]
     spreads = [(b - s) / s * 100 if s > 0 else 0 for b, s in zip(buys, sells)]
 
     now = datetime.now(tz=CARACAS_TZ)
@@ -629,17 +638,11 @@ def build_chart(points: list[tuple], hours: int) -> io.BytesIO:
     buys_ext  = buys  + [buys[-1]]
     sells_ext = sells + [sells[-1]]
 
-    # Y-axis: clip to 5th–95th percentile of all rates to prevent outlier spikes
-    # (bad oracle events during downtime periods) from collapsing the scale.
-    import statistics
-    all_rates = sorted(buys + sells)
-    p5_idx  = max(0, int(len(all_rates) * 0.05))
-    p95_idx = min(len(all_rates) - 1, int(len(all_rates) * 0.95))
-    p5  = all_rates[p5_idx]
-    p95 = all_rates[p95_idx]
-    rate_pad = max(5, (p95 - p5) * 0.10)
-    y_lo = max(500, p5  - rate_pad)
-    y_hi = p95 + rate_pad
+    # Y-axis bounds from the clean data
+    all_rates = buys + sells
+    rate_pad = max(5, (max(all_rates) - min(all_rates)) * 0.15)
+    y_lo = max(500, min(sells) - rate_pad)
+    y_hi = max(buys) + rate_pad
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 7),
                                    gridspec_kw={"height_ratios": [3, 1]})
