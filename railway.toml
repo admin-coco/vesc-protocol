@@ -1,10 +1,11 @@
+# ROOT SERVICE DISABLED — oracle is oracle-v2/, bot is bot/
+# This file intentionally starts nothing. Delete this Railway service if it still exists.
 [build]
 builder = "nixpacks"
 
 [deploy]
-startCommand = "node oracle/rate-updater.js --watch"
-healthcheckPath = "/health"
-restartPolicyType = "always"
+startCommand = "echo 'Root service is retired. Use oracle-v2 service.' && sleep infinity"
+restartPolicyType = "never"
 
 [nixpacks]
 pkgs = ["nodejs_20"]
