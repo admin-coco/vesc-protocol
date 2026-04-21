@@ -629,6 +629,18 @@ def build_chart(points: list[tuple], hours: int) -> io.BytesIO:
     buys_ext  = buys  + [buys[-1]]
     sells_ext = sells + [sells[-1]]
 
+    # Y-axis: clip to 5th–95th percentile of all rates to prevent outlier spikes
+    # (bad oracle events during downtime periods) from collapsing the scale.
+    import statistics
+    all_rates = sorted(buys + sells)
+    p5_idx  = max(0, int(len(all_rates) * 0.05))
+    p95_idx = min(len(all_rates) - 1, int(len(all_rates) * 0.95))
+    p5  = all_rates[p5_idx]
+    p95 = all_rates[p95_idx]
+    rate_pad = max(5, (p95 - p5) * 0.10)
+    y_lo = max(500, p5  - rate_pad)
+    y_hi = p95 + rate_pad
+
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 7),
                                    gridspec_kw={"height_ratios": [3, 1]})
     fig.patch.set_facecolor("#1a1a2e")
@@ -660,9 +672,7 @@ def build_chart(points: list[tuple], hours: int) -> io.BytesIO:
     ax1.set_title(f"VESC Vault Rates — últimas {hours}h — {title_date} (VET, UTC-4)",
                   color="white", fontsize=12, pad=8)
     ax1.set_ylabel("VES / USDC", color="white", fontsize=10)
-    ymin = max(500, min(sells) - 20)
-    ymax = max(buys) + 20
-    ax1.set_ylim(ymin, ymax)
+    ax1.set_ylim(y_lo, y_hi)
     ax1.tick_params(colors="#ccc", labelsize=8)
     for s in ["bottom", "left"]:  ax1.spines[s].set_color("#555")
     for s in ["top",    "right"]: ax1.spines[s].set_visible(False)
@@ -678,7 +688,10 @@ def build_chart(points: list[tuple], hours: int) -> io.BytesIO:
     ax2.axhline(8,  color="#f39c12", linestyle="--", lw=1, alpha=0.8, label="8% mid-collapse")
     ax2.axhline(30, color="#e74c3c", linestyle="--", lw=1, alpha=0.7, label="30% halt")
     ax2.set_ylabel("Spread %", color="white", fontsize=9)
-    ax2.set_ylim(0, max(20, max(spreads) + 2))
+    # Cap at 20% so isolated spikes from broken oracle periods don't compress the normal range
+    normal_spreads = [s for s in spreads if s <= 20]
+    spread_top = max(20, max(normal_spreads) + 2) if normal_spreads else 20
+    ax2.set_ylim(0, spread_top)
     ax2.tick_params(colors="#ccc", labelsize=8)
     for s in ["bottom", "left"]:  ax2.spines[s].set_color("#555")
     for s in ["top",    "right"]: ax2.spines[s].set_visible(False)
