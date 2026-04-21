@@ -31,8 +31,9 @@ if (fs.existsSync(envPath)) {
 }
 
 const CONFIG = {
-  VAULT_ADDRESS:     process.env.VAULT_ADDRESS  || "0x50f50cf026837ab49f337927d2b3269a7dedbc60",
-  RPC_URL:           process.env.RPC_URL         || "https://mainnet.base.org",
+  VAULT_ADDRESS:     process.env.VAULT_ADDRESS      || "0x50f50cf026837ab49f337927d2b3269a7dedbc60",
+  RPC_URL:           process.env.RPC_URL             || "https://mainnet.base.org",
+  RPC_URL_FALLBACK:  process.env.RPC_URL_FALLBACK    || "https://rpc.ankr.com/base",
   MAX_STALENESS_SEC: parseInt(process.env.MAX_STALENESS_SEC || "1500"),  // 25 min
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID:   process.env.TELEGRAM_CHAT_ID,
@@ -69,15 +70,25 @@ async function sendTelegram(message) {
 async function main() {
   log("INFO", "VESC Monitor — checking on-chain staleness");
 
-  const provider = new ethers.JsonRpcProvider(CONFIG.RPC_URL);
-  const vault    = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, provider);
-
+  const rpcs = [CONFIG.RPC_URL, CONFIG.RPC_URL_FALLBACK].filter(Boolean);
   let lastUpdate;
-  try {
-    lastUpdate = Number(await vault.lastRateUpdate());
-  } catch (e) {
-    log("ERROR", `Failed to read lastRateUpdate: ${e.message}`);
-    await sendTelegram(`🚨 *VESC Oracle Monitor* — RPC read failed\n\`${e.message}\``);
+  let lastErr;
+  for (const rpcUrl of rpcs) {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const vault    = new ethers.Contract(CONFIG.VAULT_ADDRESS, VAULT_ABI, provider);
+      lastUpdate = Number(await vault.lastRateUpdate());
+      log("INFO", `RPC ok: ${rpcUrl}`);
+      lastErr = null;
+      break;
+    } catch (e) {
+      log("WARN", `RPC failed (${rpcUrl}): ${e.message}`);
+      lastErr = e;
+    }
+  }
+  if (lastErr) {
+    log("ERROR", `All RPCs failed: ${lastErr.message}`);
+    await sendTelegram(`🚨 *VESC Oracle Monitor* — RPC read failed\n\`${lastErr.message}\``);
     process.exit(1);
   }
 
