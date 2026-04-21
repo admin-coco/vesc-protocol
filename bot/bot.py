@@ -123,9 +123,8 @@ npm   = w3.eth.contract(address=Web3.to_checksum_address(NPM_ADDRESS),   abi=NPM
 def _build_w3_logs() -> Web3:
     candidates = [
         RPC_URL_FALLBACK,
-        "https://rpc.ankr.com/base",
         "https://1rpc.io/base",
-        "https://base.drpc.org",
+        "https://rpc.ankr.com/base",
     ]
     seen = set()
     for url in candidates:
@@ -1045,17 +1044,33 @@ async def cmd_sheet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     try:
         import io as _io
-        import time as _time
 
-        # Fetch logs using existing w3_logs instance
-        current   = w3_logs.eth.block_number
+        # Build a fresh RPC connection for this request — don't reuse the
+        # module-level w3_logs which may have picked a bad RPC at startup.
+        w3_sheet = _build_w3_logs()
+        current   = w3_sheet.eth.block_number
         blocks_back = int(days * 24 * 3600 / 2 * 1.05)
         start_block = max(0, current - blocks_back)
 
-        updated_logs = _get_logs_chunked(VAULT_ADDRESS, RATES_UPDATED_TOPIC, start_block, current)
-        sampled_logs = _get_logs_chunked(VAULT_ADDRESS, RATE_SAMPLED_TOPIC,  start_block, current)
+        def _get_sheet_logs(topic, fb, tb, chunk=9000):
+            import time as _time
+            all_logs = []
+            for b in range(fb, tb, chunk):
+                end = min(b + chunk - 1, tb)
+                all_logs.extend(w3_sheet.eth.get_logs({
+                    "address":   Web3.to_checksum_address(VAULT_ADDRESS),
+                    "topics":    [topic],
+                    "fromBlock": b,
+                    "toBlock":   end,
+                }))
+                if b + chunk < tb:
+                    _time.sleep(0.1)
+            return all_logs
 
-        anchor_block = w3_logs.eth.get_block(current)
+        updated_logs = _get_sheet_logs(RATES_UPDATED_TOPIC, start_block, current)
+        sampled_logs = _get_sheet_logs(RATE_SAMPLED_TOPIC,  start_block, current)
+
+        anchor_block = w3_sheet.eth.get_block(current)
         anchor_ts    = anchor_block["timestamp"]
         BASE_BLOCK_TIME = 2
 
@@ -1072,7 +1087,8 @@ async def cmd_sheet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             block_delta = current - block_num
             ts = anchor_ts - block_delta * BASE_BLOCK_TIME
             mid = (buy + sell) / 2
-            rows_by_block[block_num] = (ts, buy, sell, mid, spread, block_num, entry["transactionHash"])
+            txhash = entry["transactionHash"].hex() if hasattr(entry["transactionHash"], "hex") else entry["transactionHash"]
+            rows_by_block[block_num] = (ts, buy, sell, mid, spread, block_num, txhash)
 
         for entry in updated_logs:
             raw  = bytes.fromhex(entry["data"].hex().removeprefix("0x"))
@@ -1085,7 +1101,8 @@ async def cmd_sheet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             block_delta = current - block_num
             ts  = anchor_ts - block_delta * BASE_BLOCK_TIME
             mid = (new_buy + new_sell) / 2
-            rows_by_block[block_num] = (ts, new_buy, new_sell, mid, spread, block_num, entry["transactionHash"])
+            txhash = entry["transactionHash"].hex() if hasattr(entry["transactionHash"], "hex") else entry["transactionHash"]
+            rows_by_block[block_num] = (ts, new_buy, new_sell, mid, spread, block_num, txhash)
 
         rows = sorted(rows_by_block.values(), key=lambda r: r[0])
 
