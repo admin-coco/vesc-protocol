@@ -409,15 +409,7 @@ async function updateRates() {
     log("WARN", `Gas balance check failed (non-fatal): ${e.message}`);
   }
 
-  // 7. Always record on-chain sample (chart history) — use raw P2P rates
-  try {
-    const receipt = await recordSample(signer, CONFIG, apiBuy, apiSell);
-    log("INFO", "Rate sample recorded", { txHash: receipt.hash });
-  } catch (e) {
-    log("WARN", `recordSample failed (non-fatal): ${e.message}`);
-  }
-
-  // 8. Min change check (skip setRates if nothing meaningful changed)
+  // 7. Min change check (skip setRates if nothing meaningful changed)
   const buyChange  = changePct(effectiveBuy,  onChain.buy);
   const sellChange = changePct(effectiveSell, onChain.sell);
   const stalenessSec = Math.floor(Date.now() / 1000) - onChain.lastRateUpdate;
@@ -431,7 +423,7 @@ async function updateRates() {
     log("WARN", `Rates unchanged but on-chain data is ${Math.round(stalenessSec / 60)}m stale — forcing update`);
   }
 
-  // 9. Max change guard (abort if rate jumped > MAX_CHANGE_PCT)
+  // 8. Max change guard (abort if rate jumped > MAX_CHANGE_PCT)
   for (const [label, change] of [["buy", buyChange], ["sell", sellChange]]) {
     if (change > CONFIG.MAX_CHANGE_PCT) {
       log("WARN", `${label} rate change ${change.toFixed(2)}% exceeds ${CONFIG.MAX_CHANGE_PCT}% safety limit — HALTING`, {
@@ -442,13 +434,22 @@ async function updateRates() {
     }
   }
 
-  // 9b. Final spread guard — catches any edge case that slipped through above
+  // 8b. Final spread guard — catches any edge case that slipped through above
   const finalSpreadPct = (effectiveBuy - effectiveSell) / effectiveSell * 100;
   if (finalSpreadPct > NORMAL_SPREAD_PCT) {
     log("WARN", `Final spread ${finalSpreadPct.toFixed(2)}% > ${NORMAL_SPREAD_PCT}% — refusing to push`, {
       buy: effectiveBuy, sell: effectiveSell,
     });
     return { success: false, reason: "final_spread_too_wide", finalSpreadPct };
+  }
+
+  // 9. Record on-chain sample (chart history) — only after all guards pass,
+  // using effective (guarded) rates so bad P2P snapshots never appear in chart.
+  try {
+    const receipt = await recordSample(signer, CONFIG, effectiveBuy, effectiveSell);
+    log("INFO", "Rate sample recorded", { txHash: receipt.hash });
+  } catch (e) {
+    log("WARN", `recordSample failed (non-fatal): ${e.message}`);
   }
 
   // 10. Push rates on-chain
