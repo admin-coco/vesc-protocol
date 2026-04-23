@@ -25,10 +25,10 @@ const DEFAULTS = {
   ASSET:          "USDT",
   FIAT:           "VES",
   ROWS:           20,
-  MIN_ADS:        15,   // was 10 — require more ads for a reliable median
+  MIN_ADS:        8,    // was 15 — allow thin books at off-peak hours
   TIMEOUT_MS:     8000,
   OUTLIER_PCT:    15,   // drop ads > 15% from simple median
-  CROSS_VAL_PCT:  3,    // was 5 — detect manipulation earlier
+  CROSS_VAL_PCT:  8,    // was 3 — VES market noise routinely exceeds 3%
   MAX_WEIGHT_PCT: 30,   // cap any single ad's share of total volume at 30%
   TOP_N_ADS:      5,    // compute simple median of the first N organic (non-promoted) ads
 };

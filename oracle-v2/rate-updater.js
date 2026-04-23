@@ -225,15 +225,29 @@ async function updateRates() {
     return { success: false, reason: "spread_halt", spreadBps: spread.spreadBps };
   }
 
-  // 2. Fetch rates — Binance P2P primary, Yadio fallback
+  // 2. Fetch rates — Binance P2P primary (1 retry), Yadio fallback
   let p2pRates;
   let rateSource = "binance_p2p";
   try {
-    p2pRates = await fetchBinanceRates({
-      ROWS:       CONFIG.ROWS,
-      MIN_ADS:    CONFIG.MIN_ADS,
-      TIMEOUT_MS: CONFIG.TIMEOUT_MS,
-    });
+    let binanceErr;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        p2pRates = await fetchBinanceRates({
+          ROWS:       CONFIG.ROWS,
+          MIN_ADS:    CONFIG.MIN_ADS,
+          TIMEOUT_MS: CONFIG.TIMEOUT_MS,
+        });
+        binanceErr = null;
+        break;
+      } catch (e) {
+        binanceErr = e;
+        if (attempt < 2) {
+          log("WARN", `Binance P2P attempt ${attempt} failed — retrying in 3s: ${e.message}`);
+          await new Promise(r => setTimeout(r, 3000));
+        }
+      }
+    }
+    if (binanceErr) throw binanceErr;
     if (p2pRates.buyPromotedRemoved > 0 || p2pRates.sellPromotedRemoved > 0) {
       log("WARN", "Promoted ads removed from P2P book", {
         buyPromoted:  p2pRates.buyPromotedRemoved,
@@ -424,13 +438,25 @@ async function updateRates() {
   }
 
   // 8. Max change guard (abort if rate jumped > MAX_CHANGE_PCT)
-  for (const [label, change] of [["buy", buyChange], ["sell", sellChange]]) {
-    if (change > CONFIG.MAX_CHANGE_PCT) {
-      log("WARN", `${label} rate change ${change.toFixed(2)}% exceeds ${CONFIG.MAX_CHANGE_PCT}% safety limit — HALTING`, {
-        api:     label === "buy" ? effectiveBuy  : effectiveSell,
-        onChain: label === "buy" ? onChain.buy   : onChain.sell,
-      });
-      return { success: false, reason: "change_too_large", label, change };
+  // Suspended during force-push: a stale rate on-chain is worse than a large move.
+  if (!forceUpdate) {
+    for (const [label, change] of [["buy", buyChange], ["sell", sellChange]]) {
+      if (change > CONFIG.MAX_CHANGE_PCT) {
+        log("WARN", `${label} rate change ${change.toFixed(2)}% exceeds ${CONFIG.MAX_CHANGE_PCT}% safety limit — HALTING`, {
+          api:     label === "buy" ? effectiveBuy  : effectiveSell,
+          onChain: label === "buy" ? onChain.buy   : onChain.sell,
+        });
+        return { success: false, reason: "change_too_large", label, change };
+      }
+    }
+  } else {
+    for (const [label, change] of [["buy", buyChange], ["sell", sellChange]]) {
+      if (change > CONFIG.MAX_CHANGE_PCT) {
+        log("WARN", `${label} rate change ${change.toFixed(2)}% exceeds safety limit but rate is stale — pushing anyway`, {
+          api:     label === "buy" ? effectiveBuy  : effectiveSell,
+          onChain: label === "buy" ? onChain.buy   : onChain.sell,
+        });
+      }
     }
   }
 
@@ -470,13 +496,15 @@ async function updateRates() {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
-const MAX_CONSECUTIVE_FAILURES = 3;
+// Alert threshold: send Telegram after this many consecutive failures, then every N more.
+const FAILURE_ALERT_THRESHOLD = 3;
+const FAILURE_ALERT_REPEAT    = 6; // re-alert every 6 failures (~90 min at 15-min interval)
 
 async function main() {
   const watchMode = process.argv.includes("--watch");
   const port      = CONFIG.PORT;
 
-  // Validate signer credentials
+  // Validate signer credentials — only truly unrecoverable error: exit is correct here
   const hasPrivKey   = !!CONFIG.ORACLE_PRIVATE_KEY;
   const hasKeystore  = !!(CONFIG.KEYSTORE_JSON && CONFIG.KEYSTORE_PASSWORD);
   if (!hasPrivKey && !hasKeystore) {
@@ -502,17 +530,33 @@ async function main() {
   const ms = CONFIG.INTERVAL_MINUTES * 60 * 1000;
   log("INFO", `Next update in ${CONFIG.INTERVAL_MINUTES} minutes...`);
 
-  const interval = setInterval(async () => {
+  setInterval(async () => {
     const r = await updateRates();
-    if (r.success || r.reason === "no_change" || r.reason === "spread_halt") {
+    const ok = r.success || r.reason === "no_change" || r.reason === "spread_halt" || r.reason === "market_chaos";
+    if (ok) {
+      if (consecutiveFailures >= FAILURE_ALERT_THRESHOLD) {
+        // Recovery — notify
+        await postBookLog({ _override_text:
+          `✅ *Oracle recovered* after ${consecutiveFailures} consecutive failures\n` +
+          `Reason: \`${r.reason}\``,
+        });
+      }
       consecutiveFailures = 0;
     } else {
       consecutiveFailures++;
-      log("WARN", `Consecutive failures: ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}`);
-      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        log("ERROR", "Too many consecutive failures — exiting for Railway restart");
-        clearInterval(interval);
-        process.exit(1);
+      log("WARN", `Consecutive failures: ${consecutiveFailures}`);
+      // Alert at threshold, then every FAILURE_ALERT_REPEAT cycles after that
+      if (
+        consecutiveFailures === FAILURE_ALERT_THRESHOLD ||
+        consecutiveFailures % FAILURE_ALERT_REPEAT === 0
+      ) {
+        log("ERROR", `Oracle has failed ${consecutiveFailures} cycles in a row — sending alert (NOT exiting)`);
+        await postBookLog({ _override_text:
+          `🚨 *Oracle consecutive failures: ${consecutiveFailures}*\n` +
+          `Last reason: \`${r.reason ?? "unknown"}\`\n` +
+          `Error: \`${r.error ?? "see Railway logs"}\`\n` +
+          `Oracle is still running and will retry every ${CONFIG.INTERVAL_MINUTES} min`,
+        });
       }
     }
     server.setStatus({ ...r, consecutiveFailures, cycleAt: new Date().toISOString() });
