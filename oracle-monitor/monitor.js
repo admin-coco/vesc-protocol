@@ -33,7 +33,7 @@ if (fs.existsSync(envPath)) {
 const CONFIG = {
   VAULT_ADDRESS:     process.env.VAULT_ADDRESS      || "0x50f50cf026837ab49f337927d2b3269a7dedbc60",
   RPC_URL:           process.env.RPC_URL             || "https://mainnet.base.org",
-  RPC_URL_FALLBACK:  process.env.RPC_URL_FALLBACK    || "https://rpc.ankr.com/base",
+  RPC_URL_FALLBACK:  process.env.RPC_URL_FALLBACK    || "https://1rpc.io/base",
   MAX_STALENESS_SEC: parseInt(process.env.MAX_STALENESS_SEC || "1800"),  // 30 min — 5 min buffer after oracle's 25-min force-push
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID:   process.env.TELEGRAM_CHAT_ID,
