@@ -1185,9 +1185,65 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── HTTP API server (rates history for website chart) ─────────────────────
+
+def _start_api_server():
+    """Lightweight stdlib HTTP server exposing /api/rates as JSON.
+
+    Runs in a daemon thread alongside the Telegram bot.
+    Endpoint: GET /api/rates?hours=48  →  [{ts, buy, sell, mid}, ...]
+    """
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse, parse_qs
+    import threading
+
+    class RatesHandler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass  # suppress default HTTP log noise
+
+        def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path != "/api/rates":
+                self.send_response(404)
+                self.end_headers()
+                return
+            qs = parse_qs(parsed.query)
+            try:
+                hours = int(qs.get("hours", ["48"])[0])
+                hours = max(1, min(hours, 168))  # cap at 7 days
+            except ValueError:
+                hours = 48
+            try:
+                points = fetch_rate_history(hours)
+                data = [
+                    {"ts": int(ts * 1000), "buy": round(buy, 2), "sell": round(sell, 2), "mid": round((buy + sell) / 2, 2)}
+                    for ts, buy, sell in points
+                ]
+                body = json.dumps(data).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "public, max-age=60")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception as e:
+                log.error("API /api/rates error: %s", e)
+                self.send_response(500)
+                self.end_headers()
+
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), RatesHandler)
+    log.info("API server listening on port %s", port)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def main():
+    _start_api_server()
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start",    cmd_start))
