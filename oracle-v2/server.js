@@ -10,13 +10,20 @@
 
 const http = require("http");
 
-let _rates  = null;   // { buy, sell, buyAdsUsed, sellAdsUsed, fetchedAt }
-let _status = null;   // { success, reason, txHash, spreadBps, consecutiveFailures, cycleAt }
-let _book   = null;   // { buyPrices, sellPrices, computedBuy, computedSell, rawBuy, rawSell, spreadPct, spreadMode, mid, fetchedAt }
+let _rates   = null;
+let _status  = null;
+let _book    = null;
+// Circular buffer: last 576 readings = 48h at 5-min intervals
+const HISTORY_MAX = 576;
+const _history = [];
 
 function setRates(r)  { _rates  = r; }
 function setStatus(s) { _status = s; }
 function setBook(b)   { _book   = b; }
+function addHistory(entry) {
+  _history.push(entry);
+  if (_history.length > HISTORY_MAX) _history.shift();
+}
 
 function start(port) {
   const server = http.createServer((req, res) => {
@@ -56,6 +63,16 @@ function start(port) {
       return;
     }
 
+    if (req.url === "/history") {
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "public, max-age=60",
+      });
+      res.end(JSON.stringify(_history));
+      return;
+    }
+
     res.writeHead(404).end();
   });
 
@@ -66,4 +83,4 @@ function start(port) {
   return server;
 }
 
-module.exports = { start, setRates, setStatus, setBook };
+module.exports = { start, setRates, setStatus, setBook, addHistory };

@@ -271,6 +271,7 @@ async function updateRates() {
       });
     }
     server.setRates(p2pRates);
+    server.addHistory({ ts: Date.now(), buy: p2pRates.buy, sell: p2pRates.sell, mid: p2pRates.mid ?? ((p2pRates.buy + p2pRates.sell) / 2) });
   } catch (binanceErr) {
     log("WARN", `Binance P2P failed — trying Yadio fallback: ${binanceErr.message}`);
     try {
@@ -282,6 +283,7 @@ async function updateRates() {
         mid:  p2pRates.mid.toFixed(4),
       });
       server.setRates(p2pRates);
+      server.addHistory({ ts: Date.now(), buy: p2pRates.buy, sell: p2pRates.sell, mid: p2pRates.mid ?? ((p2pRates.buy + p2pRates.sell) / 2) });
     } catch (yadioErr) {
       log("ERROR", `Both Binance P2P and Yadio failed — skipping cycle`, {
         binance: binanceErr.message,
