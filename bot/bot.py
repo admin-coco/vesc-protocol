@@ -111,7 +111,7 @@ NPM_ABI = [
     },
 ]
 
-RPC_URL_FALLBACK = os.environ.get("RPC_URL_FALLBACK", "https://rpc.ankr.com/base")
+RPC_URL_FALLBACK = os.environ.get("RPC_URL_FALLBACK", "https://base-rpc.publicnode.com")
 
 w3    = Web3(Web3.HTTPProvider(RPC_URL))
 vault = w3.eth.contract(address=Web3.to_checksum_address(VAULT_ADDRESS), abi=VAULT_ABI)
@@ -123,6 +123,8 @@ npm   = w3.eth.contract(address=Web3.to_checksum_address(NPM_ADDRESS),   abi=NPM
 def _build_w3_logs() -> Web3:
     candidates = [
         RPC_URL_FALLBACK,
+        "https://base-rpc.publicnode.com",
+        "https://mainnet.base.org",
         "https://1rpc.io/base",
         "https://rpc.ankr.com/base",
     ]
@@ -132,8 +134,16 @@ def _build_w3_logs() -> Web3:
             continue
         seen.add(url)
         try:
-            w = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 5}))
-            w.eth.block_number  # quick connectivity check
+            w = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 10}))
+            head = w.eth.block_number  # connectivity
+            # Probe the capability the chart actually needs: a wide getLogs range.
+            # Some free tiers (Ankr, 1rpc) pass the connectivity check but cap
+            # eth_getLogs at 50 blocks, which kills 24h history fetches.
+            w.eth.get_logs({
+                "address":   Web3.to_checksum_address(VAULT_ADDRESS),
+                "fromBlock": max(0, head - 999),
+                "toBlock":   head,
+            })
             log.info("w3_logs using RPC: %s", url)
             return w
         except Exception as e:
