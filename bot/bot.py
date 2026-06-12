@@ -111,7 +111,7 @@ NPM_ABI = [
     },
 ]
 
-RPC_URL_FALLBACK = os.environ.get("RPC_URL_FALLBACK", "https://base-rpc.publicnode.com")
+RPC_URL_FALLBACK = os.environ.get("RPC_URL_FALLBACK", "https://mainnet.base.org")
 
 w3    = Web3(Web3.HTTPProvider(RPC_URL))
 vault = w3.eth.contract(address=Web3.to_checksum_address(VAULT_ADDRESS), abi=VAULT_ABI)
@@ -120,39 +120,72 @@ npm   = w3.eth.contract(address=Web3.to_checksum_address(NPM_ADDRESS),   abi=NPM
 
 # Separate Web3 instance for log-heavy operations (chart) — avoids rate-limiting
 # the main w3 instance. Tries RPC_URL_FALLBACK first, then a hardcoded backup list.
-def _build_w3_logs() -> Web3:
-    candidates = [
-        RPC_URL_FALLBACK,
-        "https://base-rpc.publicnode.com",
-        "https://mainnet.base.org",
-        "https://1rpc.io/base",
-        "https://rpc.ankr.com/base",
-    ]
+# Bigger chunks = fewer requests per /chart (24h ≈ 10 calls instead of ~96),
+# which matters because free RPCs throttle bursts from datacenter IPs.
+LOGS_CHUNK = 5000
+
+_LOGS_RPC_CANDIDATES = [
+    RPC_URL_FALLBACK,
+    "https://mainnet.base.org",
+    "https://base-rpc.publicnode.com",
+    "https://1rpc.io/base",
+    "https://rpc.ankr.com/base",
+]
+
+
+def _probe_logs_rpc(url: str) -> Web3 | None:
+    """Validate the capability the chart actually needs: a wide getLogs range.
+
+    Some free tiers pass a connectivity check but cap eth_getLogs at 50 blocks
+    (Ankr/1rpc) or 403 datacenter IPs on burst (publicnode) — probe with a
+    real chunk-sized query.
+    """
+    try:
+        w = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 10}))
+        head = w.eth.block_number
+        w.eth.get_logs({
+            "address":   Web3.to_checksum_address(VAULT_ADDRESS),
+            "fromBlock": max(0, head - (LOGS_CHUNK - 1)),
+            "toBlock":   head,
+        })
+        return w
+    except Exception as e:
+        log.warning("w3_logs RPC %s failed probe: %s", url, e)
+        return None
+
+
+def _build_w3_logs() -> tuple[Web3, str]:
     seen = set()
-    for url in candidates:
+    for url in _LOGS_RPC_CANDIDATES:
         if url in seen:
             continue
         seen.add(url)
-        try:
-            w = Web3(Web3.HTTPProvider(url, request_kwargs={"timeout": 10}))
-            head = w.eth.block_number  # connectivity
-            # Probe the capability the chart actually needs: a wide getLogs range.
-            # Some free tiers (Ankr, 1rpc) pass the connectivity check but cap
-            # eth_getLogs at 50 blocks, which kills 24h history fetches.
-            w.eth.get_logs({
-                "address":   Web3.to_checksum_address(VAULT_ADDRESS),
-                "fromBlock": max(0, head - 999),
-                "toBlock":   head,
-            })
+        w = _probe_logs_rpc(url)
+        if w is not None:
             log.info("w3_logs using RPC: %s", url)
-            return w
-        except Exception as e:
-            log.warning("w3_logs RPC %s failed: %s", url, e)
+            return w, url
     # Last resort: return primary RPC (will share rate limit with w3, but won't crash)
     log.warning("All w3_logs fallback RPCs failed — falling back to primary RPC")
-    return Web3(Web3.HTTPProvider(RPC_URL))
+    return Web3(Web3.HTTPProvider(RPC_URL)), RPC_URL
 
-w3_logs = _build_w3_logs()
+
+w3_logs, _w3_logs_url = _build_w3_logs()
+
+
+def _rotate_w3_logs() -> bool:
+    """Switch to the next working logs RPC after a mid-fetch failure."""
+    global w3_logs, _w3_logs_url
+    seen = {_w3_logs_url}
+    for url in _LOGS_RPC_CANDIDATES:
+        if url in seen:
+            continue
+        seen.add(url)
+        w = _probe_logs_rpc(url)
+        if w is not None:
+            log.info("w3_logs rotated: %s -> %s", _w3_logs_url, url)
+            w3_logs, _w3_logs_url = w, url
+            return True
+    return False
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -556,24 +589,32 @@ RATE_SAMPLED_TOPIC  = "0x1c1d3f22c7ffab6fec5bb6fcd539d870a933e691ac52fed035ed0cc
 CARACAS_TZ = zoneinfo.ZoneInfo("America/Caracas")
 
 
-def _get_logs_chunked(address, topic, from_block, to_block, chunk=1000):
-    """Fetch event logs in chunks to avoid RPC range limits.
+def _get_logs_chunked(address, topic, from_block, to_block, chunk=LOGS_CHUNK):
+    """Fetch event logs in chunks, rotating to the next RPC on mid-fetch failures.
 
-    Uses w3_logs (fallback RPC) to avoid rate-limiting the main w3 instance.
-    chunk=1000 is conservative — llamarpc allows larger but this keeps us safe.
+    Free endpoints fail in creative ways (range caps, datacenter-IP 403s,
+    burst limits) — a failed chunk triggers one rotation + retry instead of
+    killing the whole chart.
     """
     import time
     all_logs = []
     for fb in range(from_block, to_block, chunk):
         tb = min(fb + chunk - 1, to_block)
-        all_logs.extend(w3_logs.eth.get_logs({
+        params = {
             "address":   Web3.to_checksum_address(address),
             "topics":    [topic],
             "fromBlock": fb,
             "toBlock":   tb,
-        }))
+        }
+        try:
+            all_logs.extend(w3_logs.eth.get_logs(params))
+        except Exception as e:
+            log.warning("getLogs chunk failed on %s (%s) — rotating RPC", _w3_logs_url, e)
+            if not _rotate_w3_logs():
+                raise
+            all_logs.extend(w3_logs.eth.get_logs(params))
         if fb + chunk < to_block:
-            time.sleep(0.1)  # 100ms between chunks — stays well under rate limits
+            time.sleep(0.15)  # brief pause between chunks — stays under burst limits
     return all_logs
 
 
