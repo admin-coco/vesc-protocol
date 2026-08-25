@@ -33,7 +33,8 @@ if (fs.existsSync(envPath)) {
 const CONFIG = {
   VAULT_ADDRESS:     process.env.VAULT_ADDRESS     || "0x50f50cf026837ab49f337927d2b3269a7dedbc60",
   RPC_URL:           process.env.RPC_URL            || "https://mainnet.base.org",
-  RPC_URL_FALLBACK:  process.env.RPC_URL_FALLBACK   || "https://base.llamarpc.com",
+  RPC_URL_PRIMARY:   process.env.RPC_URL            || "https://mainnet.base.org",
+  RPC_URL_FALLBACK:  process.env.RPC_URL_FALLBACK   || "https://1rpc.io/base",
   ORACLE_PRIVATE_KEY: process.env.ORACLE_PRIVATE_KEY,
   KEYSTORE_JSON:      process.env.KEYSTORE_JSON,
   KEYSTORE_PASSWORD:  process.env.KEYSTORE_PASSWORD,
@@ -460,6 +461,27 @@ async function updateRates() {
         });
       }
     }
+  }
+
+  // 8c. Vault step cap — VESCVault reverts RateChangeTooLarge() on any move > 5%
+  // (MAX_RATE_CHANGE_BPS = 500). Clamp each side to a 4.9% step toward the target
+  // so a large gap is walked over successive cycles instead of reverting forever.
+  const VAULT_MAX_STEP_PCT = 4.9;
+  const clampStep = (target, current) => {
+    const maxUp   = current * (1 + VAULT_MAX_STEP_PCT / 100);
+    const maxDown = current * (1 - VAULT_MAX_STEP_PCT / 100);
+    return Math.min(Math.max(target, maxDown), maxUp);
+  };
+  const clampedBuy  = clampStep(effectiveBuy,  onChain.buy);
+  const clampedSell = clampStep(effectiveSell, onChain.sell);
+  if (clampedBuy !== effectiveBuy || clampedSell !== effectiveSell) {
+    log("WARN", "Rate gap exceeds vault 5% step cap — walking toward market", {
+      targetBuy:  effectiveBuy.toFixed(4),  targetSell: effectiveSell.toFixed(4),
+      pushBuy:    clampedBuy.toFixed(4),    pushSell:   clampedSell.toFixed(4),
+    });
+    effectiveBuy  = clampedBuy;
+    effectiveSell = clampedSell;
+    if (effectiveSell > effectiveBuy) effectiveSell = effectiveBuy; // vault requires sell <= buy
   }
 
   // 8b. Final spread guard — catches any edge case that slipped through above

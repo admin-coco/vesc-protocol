@@ -52,8 +52,9 @@ async function buildSigner(config) {
     throw new Error("No signer credentials: set ORACLE_PRIVATE_KEY or KEYSTORE_JSON+KEYSTORE_PASSWORD");
   }
 
-  // Try primary RPC — if it fails to detect network, fall back immediately
-  const rpcs = [config.RPC_URL, config.RPC_URL_FALLBACK].filter(Boolean);
+  // Try primary RPC — if it fails to detect network, fall back immediately.
+  // Always start from RPC_URL_PRIMARY so a past failover never sticks permanently.
+  const rpcs = [config.RPC_URL_PRIMARY ?? config.RPC_URL, config.RPC_URL_FALLBACK].filter(Boolean);
   let lastErr;
   for (const rpcUrl of rpcs) {
     try {
@@ -74,7 +75,7 @@ async function buildSigner(config) {
  * Tries primary RPC first, falls back to RPC_URL_FALLBACK on failure.
  */
 async function getOnChainRates(config) {
-  const rpcs = [config.RPC_URL, config.RPC_URL_FALLBACK].filter(Boolean);
+  const rpcs = [config.RPC_URL_PRIMARY ?? config.RPC_URL, config.RPC_URL_FALLBACK].filter(Boolean);
   let lastErr;
   for (const rpcUrl of rpcs) {
     try {
@@ -135,7 +136,12 @@ async function getNextNonce(signer) {
  */
 async function pushRates(signer, config, buyRate, sellRate) {
   if (await hasPendingTx(signer)) {
-    throw new Error("Pending transaction in mempool — skipping to avoid nonce gap");
+    // RPC replicas can briefly disagree right after recordSample mines —
+    // re-check once before treating it as a genuinely stuck transaction.
+    await new Promise(r => setTimeout(r, 3000));
+    if (await hasPendingTx(signer)) {
+      throw new Error("Pending transaction in mempool — skipping to avoid nonce gap");
+    }
   }
   const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, signer);
   const gasPrice = await getGasPrice(signer.provider);
