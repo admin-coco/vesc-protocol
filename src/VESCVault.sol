@@ -8,7 +8,8 @@ import {UUPSUpgradeable}           from "@openzeppelin/contracts-upgradeable/pro
 import {Initializable}             from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {SafeERC20}                 from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20}                    from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {VESCToken}                 from "./VESCToken.sol";
+import {IERC20Permit}              from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
+import {IVaultToken}               from "./IVaultToken.sol";
 
 contract VESCVault is
     Initializable,
@@ -19,7 +20,7 @@ contract VESCVault is
 {
     using SafeERC20 for IERC20;
 
-    VESCToken public vesc;
+    IVaultToken public vesc;
     IERC20    public usdc;
 
     // Both rates: VES per USD, 18 decimals.
@@ -104,7 +105,7 @@ contract VESCVault is
         __UUPSUpgradeable_init();
 
         usdc = IERC20(_usdc);
-        vesc = VESCToken(_vesc);
+        vesc = IVaultToken(_vesc);
         buyRate  = initialBuyRate;
         sellRate = initialSellRate;
         lastRateUpdate = block.timestamp;
@@ -210,6 +211,24 @@ contract VESCVault is
     /// @param usdcAmount  Amount of USDC to deposit (6 decimals)
     /// @param minVescOut  Minimum VESC to receive
     function mint(uint256 usdcAmount, uint256 minVescOut) external nonReentrant whenNotPaused {
+        _mint(usdcAmount, minVescOut);
+    }
+
+    /// @notice mint() with a USDC EIP-2612 signature instead of a prior approve tx
+    /// @dev permit is in try/catch so a front-run permit (allowance already set) doesn't brick the mint
+    function mintWithPermit(
+        uint256 usdcAmount,
+        uint256 minVescOut,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external nonReentrant whenNotPaused {
+        try IERC20Permit(address(usdc)).permit(msg.sender, address(this), usdcAmount, deadline, v, r, s) {} catch {}
+        _mint(usdcAmount, minVescOut);
+    }
+
+    function _mint(uint256 usdcAmount, uint256 minVescOut) internal {
         if (emergencyMode) revert NotEmergencyMode();
         if (usdcAmount == 0) revert UsdcAmountZero();
         if (block.timestamp - lastRateUpdate > MAX_RATE_STALENESS) revert RateStale();
