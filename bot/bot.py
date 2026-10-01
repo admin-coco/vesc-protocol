@@ -44,14 +44,18 @@ log = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 RPC_URL        = os.environ.get("RPC_URL", "https://mainnet.base.org")
 ORACLE_URL     = os.environ.get("ORACLE_URL", "").rstrip("/")   # e.g. https://vesc-oracle.up.railway.app
-VAULT_ADDRESS  = "0x50f50cf026837ab49f337927d2b3269a7dedbc60"  # ERC1967Proxy
+# One bot instance per token: defaults are the original VESC stack; the wVES instance
+# overrides these via env (VAULT_ADDRESS, TOKEN_SYMBOL, POOL_ADDRESS="" until a pool exists).
+VAULT_ADDRESS  = os.environ.get("VAULT_ADDRESS", "0x50f50cf026837ab49f337927d2b3269a7dedbc60")  # ERC1967Proxy
+SYM            = os.environ.get(f"TOKEN_SYMBOL", "{SYM}")
 
-# Uniswap v3 pool position (VESC/USDC, 0.05% fee)
-POOL_ADDRESS   = "0x4d717b7cd7d51e5848D1968A57014D868Bc0E7E5"
+# Uniswap v3 pool position (<SYM>/USDC, 0.05% fee). Empty POOL_ADDRESS disables /pool, /fees, /mm.
+POOL_ADDRESS   = os.environ.get(f"POOL_ADDRESS", "0x4d717b7cd7d51e5848D1968A57014D868Bc0E7E5" if SYM == "{SYM}" else "")
 NPM_ADDRESS    = "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1"  # NonfungiblePositionManager
-POOL_TOKEN_ID  = 4876722
+POOL_TOKEN_ID  = int(os.environ.get("POOL_TOKEN_ID", "4876722"))
 POOL_FEE       = "0.05%"
-POOL_URL       = "https://app.uniswap.org/explore/pools/base/0x4d717b7cd7d51e5848D1968A57014D868Bc0E7E5"
+POOL_URL       = f"https://app.uniswap.org/explore/pools/base/{POOL_ADDRESS}"
+POOL_ENABLED   = bool(POOL_ADDRESS)
 
 VAULT_ABI = [
     {
@@ -115,7 +119,7 @@ RPC_URL_FALLBACK = os.environ.get("RPC_URL_FALLBACK", "https://mainnet.base.org"
 
 w3    = Web3(Web3.HTTPProvider(RPC_URL))
 vault = w3.eth.contract(address=Web3.to_checksum_address(VAULT_ADDRESS), abi=VAULT_ABI)
-pool  = w3.eth.contract(address=Web3.to_checksum_address(POOL_ADDRESS),  abi=POOL_ABI)
+pool  = w3.eth.contract(address=Web3.to_checksum_address(POOL_ADDRESS),  abi=POOL_ABI) if POOL_ENABLED else None
 npm   = w3.eth.contract(address=Web3.to_checksum_address(NPM_ADDRESS),   abi=NPM_ABI)
 
 # Separate Web3 instance for log-heavy operations (chart) — avoids rate-limiting
@@ -208,11 +212,11 @@ def format_rates(buy: Decimal, sell: Decimal) -> str:
     burn_rate = buy    # buyRate  — what user gets when burning (more VESC needed per dollar)
     spread_pct = (buy - sell) / sell * 100
     return (
-        f"🟢 *Mint VESC:* `1 USDC = {mint_rate:,.4f} VESC`\n"
-        f"🔴 *Burn VESC:* `1 USDC = {burn_rate:,.4f} VESC`\n"
+        f"🟢 *Mint {SYM}:* `1 USDC = {mint_rate:,.4f} {SYM}`\n"
+        f"🔴 *Burn {SYM}:* `1 USDC = {burn_rate:,.4f} {SYM}`\n"
         f"📊 *Spread:* `{spread_pct:.2f}%`\n\n"
-        f"  1 VESC ≈ `{(1/mint_rate):.8f} USDC` (mint)\n"
-        f"  1 VESC ≈ `{(1/burn_rate):.8f} USDC` (burn)"
+        f"  1 {SYM} ≈ `{(1/mint_rate):.8f} USDC` (mint)\n"
+        f"  1 {SYM} ≈ `{(1/burn_rate):.8f} USDC` (burn)"
     )
 
 
@@ -285,7 +289,7 @@ async def cmd_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ── /quote ────────────────────────────────────────────────────────────────
 
 async def cmd_quote(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    usage = "Usage:\n  `/quote mint 100` — how much VESC for 100 USDC\n  `/quote burn 500` — how much USDC for 500 VESC"
+    usage = f"Usage:\n  `/quote mint 100` — how much {SYM} for 100 USDC\n  `/quote burn 500` — how much USDC for 500 {SYM}"
     args = ctx.args
     if len(args) != 2:
         await update.message.reply_text(usage, parse_mode="Markdown")
@@ -314,17 +318,17 @@ async def cmd_quote(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🪙 *Mint Quote*\n\n"
             f"  Pay: `{amount:,.2f} USDC`\n"
-            f"  Get: `{vesc_out:,.4f} VESC`\n\n"
-            f"  Mint rate: `1 USDC = {sell:,.4f} VESC`",
+            f"  Get: `{vesc_out:,.4f} {SYM}`\n\n"
+            f"  Mint rate: `1 USDC = {sell:,.4f} {SYM}`",
             parse_mode="Markdown",
         )
     else:
         usdc_out = amount / buy  # vault burn() uses buyRate
         await update.message.reply_text(
             f"🔥 *Burn Quote*\n\n"
-            f"  Burn: `{amount:,.4f} VESC`\n"
+            f"  Burn: `{amount:,.4f} {SYM}`\n"
             f"  Get:  `{usdc_out:,.6f} USDC`\n\n"
-            f"  Burn rate: `1 USDC = {buy:,.4f} VESC`",
+            f"  Burn rate: `1 USDC = {buy:,.4f} {SYM}`",
             parse_mode="Markdown",
         )
 
@@ -495,10 +499,10 @@ def _pool_advice(buy: Decimal, sell: Decimal, ps: dict) -> str:
             f"  2. Connect wallet that owns NFT position `#{POOL_TOKEN_ID}`\n"
             f"  3. Remove liquidity from position `#{POOL_TOKEN_ID}`\n"
             f"  4. Create a new position centered on current vault mid:\n"
-            f"     `{mid_price:.8f} USDC/VESC`\n"
+            f"     `{mid_price:.8f} USDC/{SYM}`\n"
             f"  5. Use fee tier: `{POOL_FEE}`\n"
             f"  6. Set range to cover ±10% around mid price\n"
-            f"  7. Add liquidity with your VESC + USDC balances\n"
+            f"  7. Add liquidity with your {SYM} + USDC balances\n"
             f"  8. Run `/pool` again to confirm new position is in range"
         )
 
@@ -510,7 +514,7 @@ def _pool_advice(buy: Decimal, sell: Decimal, ps: dict) -> str:
         headline = "✅ IN RANGE"
 
     return (
-        f"[🏊 VESC/USDC]({POOL_URL}) {headline}\n\n"
+        f"[🏊 {SYM}/USDC]({POOL_URL}) {headline}\n\n"
         f"Tick `{cur_tick}` | ↓`{pct_to_low:.1f}%` lower · ↑`{pct_to_high:.1f}%` upper\n"
         f"Buy `{buy:,.0f}` · Sell `{sell:,.0f}` VES/USD · Mid `{mid_price:.6f}`"
         f"{rebalance_steps}"
@@ -518,6 +522,9 @@ def _pool_advice(buy: Decimal, sell: Decimal, ps: dict) -> str:
 
 
 async def cmd_pool(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not POOL_ENABLED:
+        await update.message.reply_text(f"🏊 No {SYM}/USDC pool yet — mint and burn go through the vault at the oracle rate.")
+        return
     try:
         buy, sell = get_buy_sell_rates()
     except Exception as e:
@@ -542,6 +549,9 @@ async def cmd_pool(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ── /fees ─────────────────────────────────────────────────────────────────
 
 async def cmd_fees(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not POOL_ENABLED:
+        await update.message.reply_text(f"🏊 No {SYM}/USDC pool yet — mint and burn go through the vault at the oracle rate.")
+        return
     try:
         pos = npm.functions.positions(POOL_TOKEN_ID).call()
     except Exception as e:
@@ -571,7 +581,7 @@ async def cmd_fees(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"💰 *Uncollected LP Fees — Position #{POOL_TOKEN_ID}*\n\n"
         f"  USDC: `{usdc_fees:,.6f}`\n"
-        f"  VESC: `{vesc_fees:,.4f}`\n\n"
+        f"  {SYM}: `{vesc_fees:,.4f}`\n\n"
         f"  Liquidity: `{liquidity:,}`\n"
         f"  Fee tier:  `{POOL_FEE}`"
         f"{collect_note}",
@@ -722,7 +732,7 @@ def build_chart(points: list[tuple], hours: int) -> io.BytesIO:
     ], facecolor="#0f3460", labelcolor="white", framealpha=0.9, fontsize=8)
 
     title_date = now.strftime("%Y-%m-%d")
-    ax1.set_title(f"VESC Vault Rates — últimas {hours}h — {title_date} (VET, UTC-4)",
+    ax1.set_title(f"{SYM} Vault Rates — últimas {hours}h — {title_date} (VET, UTC-4)",
                   color="white", fontsize=12, pad=8)
     ax1.set_ylabel("VES / USDC", color="white", fontsize=10)
     ax1.set_ylim(y_lo, y_hi)
@@ -781,7 +791,7 @@ async def cmd_chart(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         now_vet = datetime.now(tz=CARACAS_TZ).strftime("%Y-%m-%d %H:%M VET")
         await update.message.reply_photo(
             photo=buf,
-            caption=f"📈 VESC buy/sell rates — últimas {hours}h\n🕐 {now_vet}",
+            caption=f"📈 {SYM} buy/sell rates — últimas {hours}h\n🕐 {now_vet}",
         )
         await msg.delete()
     except Exception as e:
@@ -921,6 +931,9 @@ async def cmd_mm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     Usage: /mm [pool_tvl_usdc] [daily_volume_usdc]
     Example: /mm 10000 5000
     """
+    if not POOL_ENABLED:
+        await update.message.reply_text(f"🏊 No {SYM}/USDC pool yet — mint and burn go through the vault at the oracle rate.")
+        return
     # Optional args: TVL and daily volume for APR estimate
     tvl_usdc    = 10_000.0
     daily_vol   = 5_000.0
@@ -1039,12 +1052,12 @@ async def cmd_mm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📊 *Market Maker Dashboard*\n"
         f"─────────────────────────\n\n"
         f"*Vault Rates (oracle)*\n"
-        f"  Mint rate:  `{vault_sell_f:,.2f}` VESC/USDC\n"
-        f"  Burn rate:  `{vault_buy_f:,.2f}` VESC/USDC\n"
+        f"  Mint rate:  `{vault_sell_f:,.2f}` {SYM}/USDC\n"
+        f"  Burn rate:  `{vault_buy_f:,.2f}` {SYM}/USDC\n"
         f"  Vault spread: `{vault_spread_pct:.2f}%`\n\n"
         f"*Pool Spot Price*\n"
-        f"  Pool:  `{pool_vesc_per_usdc:,.2f}` VESC/USDC\n"
-        f"  Vault mid: `{vault_mid:,.2f}` VESC/USDC\n"
+        f"  Pool:  `{pool_vesc_per_usdc:,.2f}` {SYM}/USDC\n"
+        f"  Vault mid: `{vault_mid:,.2f}` {SYM}/USDC\n"
         f"  Gap: `{gap_pct:+.3f}%` vs vault mid\n\n"
         f"*Arbitrage*\n"
         f"  {arb_signal}: {arb_direction}\n"
@@ -1179,7 +1192,7 @@ async def cmd_sheet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             document=_io.BytesIO(csv_bytes),
             filename=filename,
             caption=(
-                f"📊 *VESC Rate History — last {days} days*\n"
+                f"📊 *{SYM} Rate History — last {days} days*\n"
                 f"`{len(rows)}` samples · exported {now_utc}\n\n"
                 f"Each row links to its Basescan tx for on-chain audit.\n"
                 f"Vault: `{VAULT_ADDRESS}`"
@@ -1217,12 +1230,12 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *VESC Price Bot*\n\n"
-        "I track the live VES/USDC rate from the VESC Protocol vault on Base.\n\n"
+        f"👋 *{SYM} Price Bot*\n\n"
+        f"I track the live VES/USDC rate from the {SYM} Protocol vault on Base.\n\n"
         "Commands:\n"
         "  /price — current buy & sell rates\n"
-        "  /quote mint 100 — VESC you'd get for 100 USDC\n"
-        "  /quote burn 500 — USDC you'd get for 500 VESC\n"
+        f"  /quote mint 100 — {SYM} you'd get for 100 USDC\n"
+        f"  /quote burn 500 — USDC you'd get for 500 {SYM}\n"
         "  /pool — live Uniswap v3 pool status + rebalance guidance\n"
         "  /fees — uncollected LP fees on position #4876709\n"
         "  /chart — buy/sell rate chart last 24h (or /chart 48 for 48h)\n"
