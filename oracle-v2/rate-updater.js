@@ -17,6 +17,7 @@ const path    = require("path");
 const https   = require("https");
 
 const { fetchBinanceRates, fetchYadioRates } = require("./binance");
+const { fetchCocoPayoutRate, cocoVaultRates, redemptionBs } = require("./coco");
 const { buildSigner, getOnChainRates, pushRates, recordSample } = require("./onchain");
 const server = require("./server");
 
@@ -40,6 +41,17 @@ const CONFIG = {
   ORACLE_PRIVATE_KEY: process.env.ORACLE_PRIVATE_KEY,
   KEYSTORE_JSON:      process.env.KEYSTORE_JSON,
   KEYSTORE_PASSWORD:  process.env.KEYSTORE_PASSWORD,
+
+  // Pricing source: "binance" = P2P weighted median (legacy); "coco" = Coco Wallet Pago Móvil
+  // payout rate, priced so redeeming wVES through Coco pays >= 1 Bs per wVES.
+  RATE_SOURCE:       (process.env.RATE_SOURCE || "binance").toLowerCase(),
+  COCO_API_BASE_URL: process.env.COCO_API_BASE_URL,
+  COCO_API_KEY:      process.env.COCO_API_KEY,
+  COCO_SECRET_KEY:   process.env.COCO_SECRET_KEY,
+  VAULT_FEE_BPS:     parseInt(process.env.VAULT_FEE_BPS       || "25"),    // VESCVault FEE_BPS on burn
+  COCO_BUFFER_PCT:   parseFloat(process.env.COCO_BUFFER_PCT   || "0.5"),   // covers Coco rate drift between pushes
+  COCO_SPREAD_PCT:   parseFloat(process.env.COCO_SPREAD_PCT   || "0.1"),   // sellRate below buyRate
+  COCO_P2P_DIVERGENCE_PCT: parseFloat(process.env.COCO_P2P_DIVERGENCE_PCT || "5"), // skip push if Coco vs P2P gap exceeds this
 
   // Binance P2P
   ROWS:              parseInt(process.env.BINANCE_ROWS    || "20"),   // Binance max is 20 rows per request
@@ -97,6 +109,25 @@ async function postBookLog(book) {
 
   const modeEmoji = { normal: "✅", mid_collapse: "⚠️", market_chaos: "🚨" }[book.spreadMode] ?? "·";
   const ts = new Date(book.fetchedAt).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+
+  if (book.source === "coco_payout") {
+    const text = (
+      `📒 *Oracle Book Log* (Coco payout)\n` +
+      `\`${ts}\`\n\n` +
+      `Coco Pago Móvil payout: \`${book.cocoPayout}\` Bs/USDC\n` +
+      `P2P mid (sanity): \`${book.p2pMid != null ? book.p2pMid.toFixed(2) : "n/a"}\`\n` +
+      `Published: buy \`${book.effectiveBuy?.toFixed(2) ?? "halted"}\` · sell \`${book.effectiveSell?.toFixed(2) ?? "halted"}\`\n` +
+      `1,000 wVES redeems to ≈ \`${book.redeem1000Bs?.toFixed(1) ?? "?"}\` Bs`
+    );
+    for (const chatId of chatIds) {
+      try {
+        await httpPost(`https://api.telegram.org/bot${token}/sendMessage`, { chat_id: chatId, text, parse_mode: "Markdown" }, 5000);
+      } catch (e) {
+        log("WARN", `Book log Telegram post failed for chat ${chatId} (non-fatal): ${e.message}`);
+      }
+    }
+    return;
+  }
 
   const buyLine  = (book.buyPrices  ?? []).map(p => p.toFixed(2)).join(", ") || "n/a";
   const sellLine = (book.sellPrices ?? []).map(p => p.toFixed(2)).join(", ") || "n/a";
@@ -228,10 +259,73 @@ async function updateRates() {
     return { success: false, reason: "spread_halt", spreadBps: spread.spreadBps };
   }
 
-  // 2. Fetch rates — Binance P2P primary (1 retry), Yadio fallback
+  // 2. Fetch rates
   let p2pRates;
   let rateSource = "binance_p2p";
-  try {
+
+  // 2a. Coco payout mode — the vault prices off the rate wVES actually redeems at.
+  // Binance P2P is fetched only as a sanity check; if it is unreachable we still push.
+  if (CONFIG.RATE_SOURCE === "coco") {
+    let coco, cocoErr;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        coco = await fetchCocoPayoutRate({
+          baseUrl: CONFIG.COCO_API_BASE_URL, apiKey: CONFIG.COCO_API_KEY,
+          secretKey: CONFIG.COCO_SECRET_KEY, timeoutMs: CONFIG.TIMEOUT_MS,
+        });
+        cocoErr = null;
+        break;
+      } catch (e) {
+        cocoErr = e;
+        if (attempt < 2) await new Promise(r => setTimeout(r, 3000));
+      }
+    }
+    if (cocoErr) {
+      // No fallback on purpose: a P2P-priced push would break the 1 wVES = 1 Bs guarantee.
+      // The vault's staleness guard pauses mint/burn if this persists.
+      log("ERROR", `Coco payout rate unavailable — skipping cycle: ${cocoErr.message}`);
+      return { success: false, reason: "coco_unavailable", error: cocoErr.message };
+    }
+
+    let p2pMid = null;
+    try {
+      const p2p = await fetchBinanceRates({ ROWS: CONFIG.ROWS, MIN_ADS: CONFIG.MIN_ADS, TIMEOUT_MS: CONFIG.TIMEOUT_MS });
+      p2pMid = p2p.mid ?? (p2p.buy + p2p.sell) / 2;
+      const divergencePct = changePct(coco.payout, p2pMid);
+      if (divergencePct > CONFIG.COCO_P2P_DIVERGENCE_PCT) {
+        log("WARN", `Coco payout ${coco.payout} diverges ${divergencePct.toFixed(2)}% from P2P mid ${p2pMid.toFixed(2)} — skipping push`);
+        await postBookLog({ _override_text:
+          `⚠️ *Oracle: Coco payout rate diverges from P2P*\n` +
+          `Coco: \`${coco.payout}\` · P2P mid: \`${p2pMid.toFixed(2)}\` · gap \`${divergencePct.toFixed(2)}%\`\n` +
+          `Push skipped; vault keeps last rates.`,
+        });
+        return { success: false, reason: "coco_p2p_divergence", divergencePct };
+      }
+    } catch (e) {
+      log("WARN", `P2P sanity check unavailable (non-fatal): ${e.message}`);
+    }
+
+    const target = cocoVaultRates(coco.payout, {
+      feeBps: CONFIG.VAULT_FEE_BPS, bufferPct: CONFIG.COCO_BUFFER_PCT, spreadPct: CONFIG.COCO_SPREAD_PCT,
+    });
+    rateSource = "coco_payout";
+    p2pRates = {
+      buy: target.buy, sell: target.sell, mid: target.mid,
+      cocoPayout: coco.payout, cocoTransfer: coco.transfer, p2pMid,
+      buyTopNPrices: [], sellTopNPrices: [], buyAdsUsed: 0, sellAdsUsed: 0,
+      inverted: false, fetchedAt: coco.fetchedAt, source: rateSource,
+    };
+    log("INFO", "Coco payout rate fetched", {
+      payout: coco.payout, p2pMid: p2pMid?.toFixed(2) ?? "n/a",
+      buy: target.buy.toFixed(4), sell: target.sell.toFixed(4),
+      bufferPct: CONFIG.COCO_BUFFER_PCT, feeBps: CONFIG.VAULT_FEE_BPS,
+    });
+    server.setRates(p2pRates);
+    server.addHistory({ ts: Date.now(), buy: target.buy, sell: target.sell, mid: target.mid });
+  }
+
+  // 2b. Binance P2P primary (1 retry), Yadio fallback
+  if (!p2pRates) try {
     let binanceErr;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -361,6 +455,10 @@ async function updateRates() {
     effectiveSell,
     inverted:       p2pRates.inverted ?? false,
     fetchedAt:      p2pRates.fetchedAt,
+    source:         rateSource,
+    cocoPayout:     p2pRates.cocoPayout,
+    p2pMid:         p2pRates.p2pMid,
+    redeem1000Bs:   p2pRates.cocoPayout ? redemptionBs(1000, effectiveBuy, p2pRates.cocoPayout, CONFIG.VAULT_FEE_BPS) : undefined,
   };
   server.setBook(bookSnapshot);
   await postBookLog(bookSnapshot);
@@ -578,7 +676,9 @@ async function main() {
     vault:    CONFIG.VAULT_ADDRESS,
     secondaryVaults: CONFIG.SECONDARY_VAULTS,
     mode:     watchMode ? `watch every ${CONFIG.INTERVAL_MINUTES} min` : "single run",
-    source:   "Binance P2P USDT/VES weighted median",
+    source:   CONFIG.RATE_SOURCE === "coco"
+                ? `Coco Pago Móvil payout × (1 − ${CONFIG.VAULT_FEE_BPS} bps fee) × (1 − ${CONFIG.COCO_BUFFER_PCT}% buffer)`
+                : "Binance P2P USDT/VES weighted median",
     haltBps:  CONFIG.SPREAD_HALT_BPS,
   });
 

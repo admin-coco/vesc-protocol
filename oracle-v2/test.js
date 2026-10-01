@@ -266,6 +266,33 @@ console.log("\n8. Rate encoding — rateToWei / weiToRate roundtrip");
   assert(sell < buy, "sellRate wei < buyRate wei (correct ordering)");
 }
 
+// ─── 9. Coco payout pricing — 1 wVES must redeem to >= 1 Bs ─────────────────
+console.log("\n9. Coco payout pricing");
+
+{
+  const { cocoVaultRates, redemptionBs } = require("./coco");
+  const payout = 947;
+  const { buy, sell } = cocoVaultRates(payout, { feeBps: 25, bufferPct: 0.5, spreadPct: 0.1 });
+  assert(sell < buy, "sellRate strictly below buyRate");
+  assert(buy <= payout * 0.9975, "buyRate at or below payout net of burn fee");
+  const bs = redemptionBs(1000, buy, payout, 25);
+  assert(bs >= 1000, `1,000 wVES redeems to ${bs.toFixed(2)} Bs (>= 1,000)`);
+  assert(bs < 1010, "buffer keeps the overshoot under 1%");
+
+  // Coco rate drops 0.4% between pushes — still covered by the 0.5% buffer
+  const bsDrift = redemptionBs(1000, buy, payout * 0.996, 25);
+  assert(bsDrift >= 1000, `0.4% payout drop still redeems ${bsDrift.toFixed(2)} Bs >= 1,000`);
+
+  // Zero buffer is the exact break-even
+  const exact = cocoVaultRates(payout, { feeBps: 25, bufferPct: 0, spreadPct: 0 });
+  assert(Math.abs(redemptionBs(1000, exact.buy, payout, 25) - 1000) < 1e-6, "zero buffer = exact 1:1");
+
+  // Live P2P-priced vault today pays short — the reason for the switch
+  assert(redemptionBs(1000, 955, payout, 25) < 1000, "P2P-priced buyRate 955 pays under 1,000 Bs");
+
+  assertThrows(() => cocoVaultRates(0), "positive", "rejects zero payout");
+}
+
 // ─── Results ──────────────────────────────────────────────────────────────────
 console.log(`\n${"─".repeat(44)}`);
 console.log(`  ${passed} passed  |  ${failed} failed`);
