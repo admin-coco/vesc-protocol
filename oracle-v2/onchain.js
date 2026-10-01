@@ -74,13 +74,13 @@ async function buildSigner(config) {
  * Read current on-chain rates and staleness.
  * Tries primary RPC first, falls back to RPC_URL_FALLBACK on failure.
  */
-async function getOnChainRates(config) {
+async function getOnChainRates(config, vaultAddress = config.VAULT_ADDRESS) {
   const rpcs = [config.RPC_URL_PRIMARY ?? config.RPC_URL, config.RPC_URL_FALLBACK].filter(Boolean);
   let lastErr;
   for (const rpcUrl of rpcs) {
     try {
       const provider = new ethers.JsonRpcProvider(rpcUrl);
-      const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, provider);
+      const vault    = new ethers.Contract(vaultAddress, VAULT_ABI, provider);
       const [buyWei, sellWei, lastUpdate] = await Promise.all([
         vault.buyRate(),
         vault.sellRate(),
@@ -134,7 +134,7 @@ async function getNextNonce(signer) {
  * Push both rates on-chain via setRates().
  * Returns the transaction receipt.
  */
-async function pushRates(signer, config, buyRate, sellRate) {
+async function pushRates(signer, config, buyRate, sellRate, vaultAddress = config.VAULT_ADDRESS) {
   if (await hasPendingTx(signer)) {
     // RPC replicas can briefly disagree right after recordSample mines —
     // re-check once before treating it as a genuinely stuck transaction.
@@ -143,7 +143,7 @@ async function pushRates(signer, config, buyRate, sellRate) {
       throw new Error("Pending transaction in mempool — skipping to avoid nonce gap");
     }
   }
-  const vault    = new ethers.Contract(config.VAULT_ADDRESS, VAULT_ABI, signer);
+  const vault    = new ethers.Contract(vaultAddress, VAULT_ABI, signer);
   const gasPrice = await getGasPrice(signer.provider);
   const nonce    = await getNextNonce(signer);
   const tx       = await vault.setRates(rateToWei(buyRate), rateToWei(sellRate), { gasPrice, nonce });

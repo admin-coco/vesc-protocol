@@ -32,6 +32,8 @@ if (fs.existsSync(envPath)) {
 // ─── Config ───────────────────────────────────────────────────────────────────
 const CONFIG = {
   VAULT_ADDRESS:     process.env.VAULT_ADDRESS     || "0x50f50cf026837ab49f337927d2b3269a7dedbc60",
+  // Extra vaults (e.g. wVES) that receive the same rates after the primary push — comma-separated
+  SECONDARY_VAULTS:  (process.env.SECONDARY_VAULTS || "").split(",").map(a => a.trim()).filter(Boolean),
   RPC_URL:           process.env.RPC_URL            || "https://mainnet.base.org",
   RPC_URL_PRIMARY:   process.env.RPC_URL            || "https://mainnet.base.org",
   RPC_URL_FALLBACK:  process.env.RPC_URL_FALLBACK   || "https://1rpc.io/base",
@@ -435,6 +437,7 @@ async function updateRates() {
   if (buyChange < CONFIG.MIN_CHANGE_PCT && sellChange < CONFIG.MIN_CHANGE_PCT) {
     if (!forceUpdate) {
       log("INFO", `No significant change (buy ${buyChange.toFixed(4)}%, sell ${sellChange.toFixed(4)}%) — skipping`);
+      await mirrorSecondaryVaults(signer, effectiveBuy, effectiveSell);
       return { success: true, reason: "no_change" };
     }
     log("WARN", `Rates unchanged but on-chain data is ${Math.round(stalenessSec / 60)}m stale — forcing update`);
@@ -508,13 +511,46 @@ async function updateRates() {
     sell: { from: onChain.sell.toFixed(4), to: effectiveSell.toFixed(4), change: `${sellChange.toFixed(3)}%` },
   });
 
+  let result;
   try {
     const receipt = await pushRates(signer, CONFIG, effectiveBuy, effectiveSell);
     log("OK", "Rates updated on-chain", { txHash: receipt.hash, buy: effectiveBuy, sell: effectiveSell, spreadMode, source: rateSource });
-    return { success: true, reason: "updated", apiBuy, apiSell, txHash: receipt.hash, source: rateSource };
+    result = { success: true, reason: "updated", apiBuy, apiSell, txHash: receipt.hash, source: rateSource };
   } catch (e) {
     log("ERROR", `setRates failed: ${e.message}`);
-    return { success: false, reason: "tx_error", error: e.message };
+    result = { success: false, reason: "tx_error", error: e.message };
+  }
+
+  await mirrorSecondaryVaults(signer, effectiveBuy, effectiveSell);
+  return result;
+}
+
+/**
+ * Push the primary vault's target rates to each SECONDARY_VAULTS address.
+ * Each vault gets its own no-change / staleness check and 4.9% step clamp,
+ * since its on-chain state drifts independently. Failures are logged, never fatal.
+ */
+async function mirrorSecondaryVaults(signer, targetBuy, targetSell) {
+  const VAULT_MAX_STEP_PCT = 4.9;
+  for (const vaultAddress of CONFIG.SECONDARY_VAULTS) {
+    try {
+      const onChain  = await getOnChainRates(CONFIG, vaultAddress);
+      const staleSec = Math.floor(Date.now() / 1000) - onChain.lastRateUpdate;
+      const changed  = changePct(targetBuy, onChain.buy)  >= CONFIG.MIN_CHANGE_PCT
+                    || changePct(targetSell, onChain.sell) >= CONFIG.MIN_CHANGE_PCT;
+      if (!changed && staleSec <= CONFIG.MAX_STALENESS_SEC) {
+        log("INFO", `Secondary vault unchanged — skipping`, { vault: vaultAddress });
+        continue;
+      }
+      const clamp = (t, c) => Math.min(Math.max(t, c * (1 - VAULT_MAX_STEP_PCT / 100)), c * (1 + VAULT_MAX_STEP_PCT / 100));
+      let buy  = clamp(targetBuy,  onChain.buy);
+      let sell = clamp(targetSell, onChain.sell);
+      if (sell > buy) sell = buy;
+      const receipt = await pushRates(signer, CONFIG, buy, sell, vaultAddress);
+      log("OK", "Secondary vault rates updated", { vault: vaultAddress, txHash: receipt.hash, buy, sell });
+    } catch (e) {
+      log("ERROR", `Secondary vault push failed: ${e.message}`, { vault: vaultAddress });
+    }
   }
 }
 
@@ -540,6 +576,7 @@ async function main() {
 
   log("INFO", "VESC Oracle v2", {
     vault:    CONFIG.VAULT_ADDRESS,
+    secondaryVaults: CONFIG.SECONDARY_VAULTS,
     mode:     watchMode ? `watch every ${CONFIG.INTERVAL_MINUTES} min` : "single run",
     source:   "Binance P2P USDT/VES weighted median",
     haltBps:  CONFIG.SPREAD_HALT_BPS,
